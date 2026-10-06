@@ -5,7 +5,7 @@ import json
 import asyncpg
 import pytest
 
-from secure_policy_rag.embedding import HashingEmbedder
+from secure_policy_rag.embedding import HashingEmbedder, Vectors
 from secure_policy_rag.identity import DEMO_IDENTITIES
 from secure_policy_rag.model import AnswerModel, Behaviour, Draft, Generation, ScriptedModel
 from secure_policy_rag.pipeline import BLOCKED, REFUSAL, Assistant
@@ -143,3 +143,17 @@ async def test_personal_data_the_model_puts_in_a_blocked_link_is_redacted_in_the
     assert answer.outcome == "blocked"
     row = await last_audit(admin_pool, "dave")
     assert row["violations"] == ["url_not_in_sources:[IBAN_1].attacker.example"]
+
+
+async def test_a_retrieval_failure_is_audited_before_the_error_propagates(
+    app_pool: asyncpg.Pool, admin_pool: asyncpg.Pool
+) -> None:
+    class BrokenEmbedder(HashingEmbedder):
+        def embed_query(self, text: str) -> Vectors:
+            raise RuntimeError
+
+    failing = Assistant(app_pool, BrokenEmbedder(), ScriptedModel(), HOSTS)
+    with pytest.raises(RuntimeError):
+        await failing.ask(DEMO_IDENTITIES["alice"], "How long must my password be?")
+    row = await last_audit(admin_pool, "alice")
+    assert (row["outcome"], row["retrieved_chunk_ids"]) == ("error", [])

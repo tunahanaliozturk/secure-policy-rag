@@ -78,14 +78,20 @@ class Assistant:
                 asked = pii.redact(question)
                 s.set_attribute("spr.redactions", asked.total)
 
-            with tracer.start_as_current_span("retrieve") as s:
-                vector = await asyncio.to_thread(self._embedder.embed_query, asked.text)
-                excerpts = tuple(
-                    await store.retrieve(self._pool, reader, asked.text, vector, k=self._k, retrievers=self._retrievers)
-                )
-                s.set_attribute("spr.chunk_ids", [e.chunk_id for e in excerpts])
-
-            audit = _Audit(reader, asked, excerpts, self._model.name)
+            audit = _Audit(reader, asked, (), self._model.name)
+            try:
+                with tracer.start_as_current_span("retrieve") as s:
+                    vector = await asyncio.to_thread(self._embedder.embed_query, asked.text)
+                    excerpts = tuple(
+                        await store.retrieve(
+                            self._pool, reader, asked.text, vector, k=self._k, retrievers=self._retrievers
+                        )
+                    )
+                    s.set_attribute("spr.chunk_ids", [e.chunk_id for e in excerpts])
+            except Exception:
+                await self._finish(audit.done("error", ""), started)
+                raise
+            audit.excerpts = excerpts
             if not excerpts:
                 return await self._finish(audit.done("refused", REFUSAL), started)
 

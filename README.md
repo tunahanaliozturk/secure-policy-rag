@@ -117,7 +117,7 @@ Latency of everything except the model call: 17.3 ms p50, 21.0 ms p95, 36.1 ms p
 first measurement was 89.7 ms p50: onnxruntime's default thread pool kept spinning after each embedding and starved the
 event loop. Capping it at two threads fixed it; the story is in the benchmark file.
 
-Tests: 83 unit tests (offline), 46 integration tests (real Postgres in Docker).
+Tests: 86 unit tests (offline), 48 integration tests (real Postgres in Docker).
 
 ## Limitations
 

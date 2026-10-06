@@ -1,0 +1,9 @@
+{
+  "k": 5,
+  "embedder": "BAAI/bge-small-en-v1.5",
+  "tolerance": 0.02,
+  "hybrid": {
+    "recall": 0.9821,
+    "ndcg": 0.9367
+  }
+}

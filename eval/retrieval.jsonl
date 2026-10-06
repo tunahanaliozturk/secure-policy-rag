@@ -1,0 +1,69 @@
+{"id": "r01", "question": "What is the maximum debt-to-income ratio for a consumer loan?", "user": "alice", "expected": ["CR-001"]}
+{"id": "r02", "question": "What loan-to-value is allowed for a buy-to-let mortgage?", "user": "dave", "expected": ["CR-001"]}
+{"id": "r03", "question": "Who approves a corporate exposure of EUR 10 million?", "user": "alice", "expected": ["CR-002"]}
+{"id": "r04", "question": "Who approves a corporate exposure of EUR 10 million?", "user": "dave", "expected": [], "note": "confidential credit document; dave is markets with internal clearance"}
+{"id": "r05", "question": "How often is commercial real estate collateral revalued?", "user": "alice", "expected": ["CR-003"]}
+{"id": "r06", "question": "What haircut applies to listed shares pledged as collateral?", "user": "bob", "expected": ["CR-003"]}
+{"id": "r07", "question": "When is a business client put on the credit watchlist?", "user": "alice", "expected": ["CR-004"]}
+{"id": "r08", "question": "How long does a forborne exposure keep its forbearance status?", "user": "alice", "expected": ["CR-004"]}
+{"id": "r09", "question": "What is our current exposure to Project Heron?", "user": "alice", "expected": [], "note": "restricted; alice has confidential clearance only"}
+{"id": "r10", "question": "By how many notches may an analyst override the rating model?", "user": "alice", "expected": ["CR-006"]}
+{"id": "r11", "question": "How often are high-risk customers reviewed?", "user": "dave", "expected": ["KYC-001"]}
+{"id": "r12", "question": "Who must approve a relationship with a politically exposed person?", "user": "bob", "expected": ["KYC-002"]}
+{"id": "r13", "question": "Who must approve a relationship with a politically exposed person?", "user": "frank", "expected": [], "note": "internal document; frank sees public only"}
+{"id": "r14", "question": "How long does someone remain a PEP after leaving office?", "user": "carol", "expected": ["KYC-002"]}
+{"id": "r15", "question": "Can a customer ask to correct their address over the phone?", "user": "dave", "expected": ["KYC-003"]}
+{"id": "r16", "question": "How quickly must a level 1 analyst triage a transaction monitoring alert?", "user": "bob", "expected": ["AML-001"]}
+{"id": "r17", "question": "How quickly must a level 1 analyst triage a transaction monitoring alert?", "user": "erin", "expected": [], "note": "confidential compliance document; erin is security and data"}
+{"id": "r18", "question": "How soon must an unusual transaction be reported to the Financial Intelligence Unit?", "user": "bob", "expected": ["AML-002"]}
+{"id": "r19", "question": "Am I allowed to tell a customer that we reported their transaction?", "user": "dave", "expected": [], "note": "the answer lives in a restricted compliance document"}
+{"id": "r20", "question": "Which sanctions lists are customers and payments screened against?", "user": "carol", "expected": ["AML-003"]}
+{"id": "r21", "question": "How long do we keep customer due diligence records after the relationship ends?", "user": "erin", "expected": ["DATA-001"]}
+{"id": "r22", "question": "How long is CCTV footage from branches kept?", "user": "dave", "expected": ["DATA-001"]}
+{"id": "r23", "question": "How long is CCTV footage from branches kept?", "user": "frank", "expected": [], "note": "internal document; frank sees public only"}
+{"id": "r24", "question": "What are the information classification levels?", "user": "frank", "expected": ["DATA-002"]}
+{"id": "r25", "question": "Within how many hours must a personal data breach be notified to the authority?", "user": "erin", "expected": ["DATA-003"]}
+{"id": "r26", "question": "Can production customer data be copied to a test environment?", "user": "alice", "expected": ["DATA-004"]}
+{"id": "r27", "question": "What is required before personal data is shared with a vendor?", "user": "erin", "expected": ["DATA-005"]}
+{"id": "r28", "question": "Can I store bank files in my personal cloud storage?", "user": "frank", "expected": ["SEC-001"]}
+{"id": "r29", "question": "How long must my password be?", "user": "dave", "expected": ["SEC-002"]}
+{"id": "r30", "question": "Are SMS codes accepted as a second factor for administrator accounts?", "user": "erin", "expected": ["SEC-002"]}
+{"id": "r31", "question": "How long does just-in-time privileged access last?", "user": "erin", "expected": ["SEC-003"]}
+{"id": "r32", "question": "Which systems are the crown jewel systems?", "user": "erin", "expected": ["SEC-004"]}
+{"id": "r33", "question": "Which systems are the crown jewel systems?", "user": "alice", "expected": [], "note": "restricted security document; alice is credit"}
+{"id": "r34", "question": "Can I paste customer data into a public AI chatbot?", "user": "carol", "expected": ["SEC-005"]}
+{"id": "r35", "question": "What are the IT helpdesk opening hours?", "user": "dave", "expected": ["SEC-006"]}
+{"id": "r36", "question": "How many days a week can I work from home?", "user": "frank", "expected": ["HR-001"]}
+{"id": "r37", "question": "For how many days a year can I work from another country?", "user": "dave", "expected": ["HR-001"]}
+{"id": "r38", "question": "How many unused leave days can I carry over to next year?", "user": "carol", "expected": ["HR-002"]}
+{"id": "r39", "question": "What is the salary range for grade 12?", "user": "carol", "expected": [], "note": "restricted HR document; carol has confidential clearance"}
+{"id": "r40", "question": "What is the salary range for grade 12?", "user": "erin", "expected": [], "note": "restricted clearance but the wrong department"}
+{"id": "r41", "question": "Am I protected from retaliation if I report wrongdoing?", "user": "frank", "expected": ["HR-005"]}
+{"id": "r42", "question": "What is the deadline for submitting an expense claim?", "user": "dave", "expected": ["HR-006"]}
+{"id": "r43", "question": "Which class may I fly on a ten-hour business flight?", "user": "carol", "expected": ["HR-007"]}
+{"id": "r44", "question": "How long must I hold shares bought on my personal account?", "user": "dave", "expected": ["MKT-001"]}
+{"id": "r45", "question": "Can I use WhatsApp to talk to a client about a trade?", "user": "dave", "expected": ["MKT-002"]}
+{"id": "r46", "question": "What matters most for best execution of retail client orders?", "user": "frank", "expected": ["MKT-003"]}
+{"id": "r47", "question": "Which issuers are on the restricted list?", "user": "dave", "expected": [], "note": "restricted markets document"}
+{"id": "r48", "question": "What is the value at risk limit of the rates desk?", "user": "dave", "expected": [], "note": "confidential markets document; dave has internal clearance"}
+{"id": "r49", "question": "What disciplinary measures can be taken against an employee?", "user": "carol", "expected": ["HR-004"]}
+{"id": "r50", "question": "How long are trading desk phone recordings kept?", "user": "dave", "expected": ["MKT-002", "DATA-001"]}
+{"id": "r51", "question": "Do traders have to take a mandatory block of leave?", "user": "dave", "expected": ["HR-002"]}
+{"id": "r52", "question": "Who may add or remove names from the restricted list?", "user": "bob", "expected": [], "note": "restricted clearance, but compliance rather than markets"}
+{"id": "r53", "question": "I bought some stock last Tuesday. Am I free to sell it now?", "user": "dave", "expected": ["MKT-001"]}
+{"id": "r54", "question": "Does the bank look at what I do on my work laptop?", "user": "frank", "expected": ["SEC-001"]}
+{"id": "r55", "question": "Do I have to change my login secret every 90 days?", "user": "erin", "expected": ["SEC-002"]}
+{"id": "r56", "question": "How long may HR hold on to the CV of someone we did not hire?", "user": "carol", "expected": ["DATA-001"]}
+{"id": "r57", "question": "Who signs off when a big company wants to borrow 40 million?", "user": "alice", "expected": ["CR-002"]}
+{"id": "r58", "question": "I got a weird message asking me to confirm my credentials. What now?", "user": "frank", "expected": ["SEC-001"]}
+{"id": "r59", "question": "Is it fine to use a chatbot to draft my emails to clients?", "user": "dave", "expected": ["SEC-005"]}
+{"id": "r60", "question": "A minister's brother wants to open an account. What extra checks apply?", "user": "bob", "expected": ["KYC-002"]}
+{"id": "r61", "question": "Our supplier needs a full dump of our client list. Can we send it?", "user": "erin", "expected": ["DATA-005"]}
+{"id": "r62", "question": "Someone stole a laptop with customer files on it. Who do I tell, and how fast?", "user": "erin", "expected": ["DATA-003"]}
+{"id": "r63", "question": "How much can I spend taking a client out to dinner?", "user": "carol", "expected": ["HR-006"]}
+{"id": "r64", "question": "A payment matched a name on the OFAC list. Can one analyst release it?", "user": "bob", "expected": ["AML-003"]}
+{"id": "r65", "question": "What happened with alert 2026-0441?", "user": "bob", "expected": ["AML-001"]}
+{"id": "r66", "question": "Can we close the accounts in Investigation Ember?", "user": "bob", "expected": ["AML-002"]}
+{"id": "r67", "question": "What is the out-of-band bridge used for?", "user": "erin", "expected": ["SEC-004"]}
+{"id": "r68", "question": "Which document carries control code CC-SEC-003-L9FE?", "user": "erin", "expected": ["SEC-003"]}
+{"id": "r69", "question": "Which document carries control code CC-SEC-003-L9FE?", "user": "dave", "expected": [], "note": "confidential security document; dave is markets with internal clearance"}

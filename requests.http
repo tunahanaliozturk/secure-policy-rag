@@ -1,0 +1,56 @@
+# Requests against the compose stack, in the order a reader would try them.
+# Mint tokens first and paste them below:
+#   docker compose exec -T api spr token dave
+#   docker compose exec -T api spr token erin
+#   docker compose exec -T api spr token frank
+
+@base = http://127.0.0.1:8400
+@dave = paste-a-token-for-dave
+@erin = paste-a-token-for-erin
+@frank = paste-a-token-for-frank
+
+### Health needs no token.
+GET {{base}}/healthz
+
+### Without a token: 401, and nothing is retrieved or audited.
+POST {{base}}/ask
+Content-Type: application/json
+
+{"question": "How long must my password be?"}
+
+### Dave (markets, internal clearance) asks an internal question and gets a cited answer.
+POST {{base}}/ask
+Authorization: Bearer {{dave}}
+Content-Type: application/json
+
+{"question": "How long must my password be?"}
+
+### Erin (security, restricted) asks about the restricted incident runbook. The answer cites SEC-004.
+POST {{base}}/ask
+Authorization: Bearer {{erin}}
+Content-Type: application/json
+
+{"question": "Which systems are the crown jewel systems?"}
+
+### Dave asks the same. He gets an answer from whatever he may read, or a refusal, never SEC-004.
+POST {{base}}/ask
+Authorization: Bearer {{dave}}
+Content-Type: application/json
+
+{"question": "Which systems are the crown jewel systems?"}
+
+### Personal data in the question is redacted before retrieval and before the model. See question_redactions.
+POST {{base}}/ask
+Authorization: Bearer {{frank}}
+Content-Type: application/json
+
+{"question": "My IBAN is NL91 ABNA 0417 1643 00 and my email is me@example.com. May I work from home?"}
+
+### Extra fields are refused, so a caller cannot send their own clearance: 422.
+POST {{base}}/ask
+Authorization: Bearer {{dave}}
+Content-Type: application/json
+
+{"question": "Which issuers are on the restricted list?", "clearance": "restricted"}
+
+### Repeat a request quickly: after 20 in a minute the same user gets 429 with Retry-After.

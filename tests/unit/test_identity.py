@@ -46,7 +46,7 @@ def test_raising_your_own_clearance_in_the_payload_breaks_the_signature() -> Non
         identity.verify(f"{forged}.{signature}", [SECRET], NOW)
 
 
-@pytest.mark.parametrize("token", ["", ".", "abc", "abc.", ".abc", "a.b.c", "x" * 3000])
+@pytest.mark.parametrize("token", ["", ".", "abc", "abc.", ".abc", "a.b.c", "x" * 3000, "é.abc", "abc.é"])
 def test_malformed_tokens_are_refused_without_detail(token: str) -> None:
     with pytest.raises(identity.InvalidToken) as raised:
         identity.verify(token, [SECRET], NOW)

@@ -90,7 +90,9 @@ def issue(identity: Identity, secret: bytes, now: datetime, ttl: timedelta) -> s
 def verify(token: str, secrets: Sequence[bytes], now: datetime) -> Identity:
     """The identity a token carries, or :class:`InvalidToken`. ``secrets`` is newest first; any of them may match."""
     payload, dot, signature = token.partition(".")
-    if not dot or not payload or not signature or len(token) > MAX_TOKEN_LENGTH:
+    # Non-ASCII is refused up front: signing encodes the payload as ASCII and compare_digest rejects non-ASCII str,
+    # and either would surface as a 503 instead of a 401.
+    if not dot or not payload or not signature or len(token) > MAX_TOKEN_LENGTH or not token.isascii():
         raise InvalidToken
     # Every candidate is checked even after a match, so timing does not reveal which secret signed the token.
     matched = [hmac.compare_digest(_sign(secret, payload), signature) for secret in secrets]

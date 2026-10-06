@@ -126,3 +126,20 @@ async def test_a_model_failure_is_audited_before_the_error_propagates(
         await assistant(app_pool, Broken()).ask(DEMO_IDENTITIES["erin"], "How long must my password be?")
     row = await last_audit(admin_pool, "erin")
     assert (row["outcome"], row["model"]) == ("error", "broken")
+
+
+async def test_personal_data_the_model_puts_in_a_blocked_link_is_redacted_in_the_audited_reasons(
+    app_pool: asyncpg.Pool, admin_pool: asyncpg.Pool
+) -> None:
+    class SmugglesAnIbanInAHost:
+        name = "smuggles"
+
+        async def generate(self, prompt: Prompt) -> Generation:
+            top = prompt.excerpts[0].chunk_id
+            answer = f"See https://nl91abna0417164300.attacker.example/x [{top}]"
+            return Generation(Draft(status="answered", answer=answer), self.name)
+
+    answer = await assistant(app_pool, SmugglesAnIbanInAHost()).ask(DEMO_IDENTITIES["dave"], "How do I book travel?")
+    assert answer.outcome == "blocked"
+    row = await last_audit(admin_pool, "dave")
+    assert row["violations"] == ["url_not_in_sources:[IBAN_1].attacker.example"]

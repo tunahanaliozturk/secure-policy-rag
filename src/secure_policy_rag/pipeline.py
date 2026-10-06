@@ -106,8 +106,10 @@ class Assistant:
 
             with tracer.start_as_current_span("verify") as s:
                 verdict = verify.check(draft.answer, {e.chunk_id: e.text for e in excerpts}, self._allowed_link_hosts)
-                s.set_attribute("spr.violations", list(verdict.violations))
-            audit.cited, audit.violations = verdict.cited, verdict.violations
+                # A reason can quote a host the model wrote, and the model can write personal data into a host.
+                violations = tuple(pii.redact(v).text for v in verdict.violations)
+                s.set_attribute("spr.violations", list(violations))
+            audit.cited, audit.violations = verdict.cited, violations
             if not verdict.ok:
                 return await self._finish(audit.done("blocked", BLOCKED), started)
             return await self._finish(audit.done("answered", draft.answer), started)

@@ -1,0 +1,122 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: lint, format, types, import contract, licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src tests benchmarks
+      - run: uv run lint-imports
+      - run: uv run python tools/license_audit.py
+
+  unit:
+    name: unit tests (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --locked
+      - run: uv run pytest tests/unit -q
+
+  integration:
+    name: integration tests (Postgres 18 + pgvector)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg18-trixie
+        env:
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: policies
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d policies"
+          --health-interval 2s
+          --health-retries 30
+    env:
+      SPR_TEST_ADMIN_DSN: postgresql://postgres:ci-only-password@127.0.0.1:5432/policies
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --locked
+      - run: uv run pytest tests/integration -q
+
+  evaluation:
+    name: retrieval gate and answer graders (real embedding model, scripted answer model)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg18-trixie
+        env:
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: policies
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d policies"
+          --health-interval 2s
+          --health-retries 30
+    env:
+      SPR_ADMIN_DATABASE_URL: postgresql://postgres:ci-only-password@127.0.0.1:5432/policies
+      SPR_APP_DB_PASSWORD: ci-only-app-password
+      SPR_DATABASE_URL: postgresql://spr_app:ci-only-app-password@127.0.0.1:5432/policies
+      SPR_MODEL_CACHE_DIR: ${{ github.workspace }}/.models
+      SPR_LOG_LEVEL: WARNING
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/cache@v6.1.0
+        with:
+          path: .models
+          key: bge-small-en-v1.5-v1
+      - run: uv sync --locked
+      - run: uv run spr migrate
+      - run: uv run spr ingest corpus
+      - name: Retrieval, compared with eval/baseline.json; any leak fails
+        run: uv run spr eval-retrieval --output eval/report-retrieval.json
+      - name: Answer graders with the scripted model
+        run: uv run spr eval-answers --output eval/report-answers.json
+      - if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: eval-reports
+          path: eval/report-*.json
+
+  vulnerabilities:
+    name: known vulnerabilities (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv export --locked --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+      - run: uvx pip-audit --requirement requirements.txt --disable-pip --no-deps --strict
+
+  quickstart:
+    name: README quick start against the compose stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - name: Start the stack exactly as the README does
+        run: |
+          export SPR_TOKEN_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+          echo "SPR_TOKEN_SECRET=$SPR_TOKEN_SECRET" >> "$GITHUB_ENV"
+          docker compose up --build --detach --wait --wait-timeout 600
+      - run: uv run --no-project python tools/smoke.py
+      - if: failure()
+        run: docker compose logs

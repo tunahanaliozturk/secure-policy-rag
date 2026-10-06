@@ -18,7 +18,8 @@ from urllib.parse import urlsplit
 
 _ID = r"[A-Z]{2,5}-\d{3}#\d+"
 _CITATION = re.compile(rf"\[({_ID}(?:\s*[,;]\s*{_ID})*)\]")  # [CR-001#2] or [CR-001#2, CR-003#1]
-_URL = re.compile(r"""(?:https?://|www\.)[^\s<>"'\])]+""", re.IGNORECASE)
+# http(s)://, scheme-relative //host (a Markdown link renders it on the page's scheme), or a bare www. host.
+_URL = re.compile(r"""(?:(?:https?:)?//|www\.)[^\s<>"'\])]+""", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,7 @@ def check(answer: str, retrieved: dict[str, str], allowed_hosts: Collection[str]
 
 
 def host(url: str) -> str:
-    return (urlsplit(url if "://" in url else f"https://{url}").hostname or "").lower()
+    return (urlsplit(f"//{url}" if url.lower().startswith("www.") else url).hostname or "").lower()
 
 
 def _unique(items: Iterable[str]) -> list[str]:

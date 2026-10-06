@@ -70,3 +70,9 @@ def test_data_appended_to_an_allowed_link_is_blocked_because_the_link_changed() 
 def test_a_markdown_image_link_is_treated_like_any_other_link() -> None:
     verdict = verify.check("![x](https://attacker.example/pixel.png) [HR-001#1]", SOURCES, HOSTS)
     assert verdict.violations == ("url_not_in_sources:attacker.example",)
+
+
+def test_a_scheme_relative_link_is_treated_like_any_other_link() -> None:
+    # Markdown renders [here](//host/path) as a link on the page's own scheme.
+    verdict = verify.check("Sign in [here](//travel-bank-portal.example.net/login) [HR-001#1]", SOURCES, HOSTS)
+    assert verdict.violations == ("url_not_in_sources:travel-bank-portal.example.net",)

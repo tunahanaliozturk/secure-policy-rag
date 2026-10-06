@@ -1,0 +1,51 @@
+# Local stack: Postgres with pgvector, a one-shot setup (schema, policies, grants, corpus), and the API.
+# The database passwords below are defaults for a laptop stack and nothing else; override them with the environment
+# variables named here. SPR_TOKEN_SECRET has no default: the API refuses to start without one (see README).
+name: secure-policy-rag
+
+x-app: &app
+  image: secure-policy-rag:local
+  environment:
+    SPR_ADMIN_DATABASE_URL: postgresql://postgres:${SPR_ADMIN_DB_PASSWORD:-local-dev-admin}@postgres:5432/policies
+    SPR_APP_DB_PASSWORD: ${SPR_APP_DB_PASSWORD:-local-dev-app}
+    SPR_DATABASE_URL: postgresql://spr_app:${SPR_APP_DB_PASSWORD:-local-dev-app}@postgres:5432/policies
+    SPR_TOKEN_SECRET: ${SPR_TOKEN_SECRET:-}
+    # "scripted" answers offline with a deterministic stand-in; set "anthropic" and ANTHROPIC_API_KEY for Claude.
+    SPR_MODEL_PROVIDER: ${SPR_MODEL_PROVIDER:-scripted}
+    SPR_MODEL: ${SPR_MODEL:-claude-sonnet-5-5}
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg18-trixie
+    environment:
+      POSTGRES_PASSWORD: ${SPR_ADMIN_DB_PASSWORD:-local-dev-admin}
+      POSTGRES_DB: policies
+    volumes:
+      - postgres:/var/lib/postgresql
+    ports: ["127.0.0.1:55440:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d policies"]
+      interval: 2s
+      retries: 30
+
+  setup:
+    <<: *app
+    build: .
+    entrypoint: ["sh", "-c", "spr migrate && spr ingest /app/corpus"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8400:8000"]
+    depends_on:
+      setup: {condition: service_completed_successfully}
+    healthcheck:
+      # The slim image has no curl or wget, so the probe is Python.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 3s
+      retries: 30
+
+volumes:
+  postgres:

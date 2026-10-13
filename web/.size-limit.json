@@ -1,0 +1,14 @@
+[
+  {
+    "name": "entry chunk: script and styles",
+    "path": ["dist/assets/index-*.js", "dist/assets/index-*.css"],
+    "gzip": true,
+    "limit": "12 kB"
+  },
+  {
+    "name": "whole app: every script and style of all three routes, which bounds any first load",
+    "path": ["dist/assets/*.js", "dist/assets/*.css"],
+    "gzip": true,
+    "limit": "100 kB"
+  }
+]

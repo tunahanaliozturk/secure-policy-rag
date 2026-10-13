@@ -1,0 +1,64 @@
+{
+  "name": "secure-policy-rag-web",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "type-check": "vue-tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:unit": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "gen:api": "openapi-typescript src/shared/api/api.openapi.json -o src/shared/api/api.schema.d.ts && openapi-typescript src/shared/api/login.openapi.json -o src/shared/api/login.schema.d.ts",
+    "size": "size-limit",
+    "lighthouse": "npx --yes @lhci/cli@0.15.1 autorun",
+    "licences": "license-checker-rseidelsohn --excludePrivatePackages --onlyAllow \"MIT;MIT-0;ISC;BSD-2-Clause;BSD-3-Clause;Apache-2.0;0BSD;BlueOak-1.0.0;CC0-1.0;CC-BY-4.0;CC-BY-3.0;Python-2.0;Unlicense;MPL-2.0\" --summary"
+  },
+  "dependencies": {
+    "@tanstack/vue-query": "^5.104.2",
+    "vue": "^3.5.44",
+    "vue-router": "^5.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.0",
+    "@size-limit/file": "^14.2.0",
+    "@testing-library/user-event": "^14.6.8",
+    "@testing-library/vue": "^8.1.0",
+    "@types/node": "^24.19.2",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "@vitest/coverage-v8": "^5.0.4",
+    "@vue/tsconfig": "^0.9.1",
+    "eslint": "^10.12.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.11.1",
+    "eslint-plugin-vuejs-accessibility": "^2.6.2",
+    "globals": "^17.13.0",
+    "jiti": "^2.7.0",
+    "jsdom": "^30.1.2",
+    "license-checker-rseidelsohn": "^5.0.1",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.9.10",
+    "size-limit": "^14.2.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4",
+    "vue-tsc": "^3.3.13"
+  },
+  "overrides": {
+    "openapi-typescript": {
+      "typescript": "$typescript"
+    }
+  }
+}

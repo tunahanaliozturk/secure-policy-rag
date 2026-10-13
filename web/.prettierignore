@@ -1,0 +1,9 @@
+dist
+coverage
+playwright-report
+test-results
+.lighthouseci
+package-lock.json
+# Generated: the server writes the two JSON documents (uv run spr openapi), openapi-typescript the two type files.
+src/shared/api/*.openapi.json
+src/shared/api/*.schema.d.ts

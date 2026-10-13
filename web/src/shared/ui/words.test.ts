@@ -37,6 +37,7 @@ describe('describeFailure', () => {
       { kind: 'network' },
       { kind: 'contract' },
       { kind: 'page' },
+      { kind: 'cancelled' },
     ]
     const words = failures.map((failure) => describeFailure(failure, 'dave'))
 

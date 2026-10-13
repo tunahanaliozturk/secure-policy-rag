@@ -4,7 +4,7 @@
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query'
 import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
-import { createMemoryHistory, type Router } from 'vue-router'
+import { createMemoryHistory, type Router, type RouteRecordRaw } from 'vue-router'
 
 import App from '@/App.vue'
 import { queryClientConfig } from '@/query'
@@ -13,14 +13,28 @@ import { createAppRouter } from '@/router'
 export interface Mounted {
   router: Router
   user: UserEvent
+  queries: QueryClient
 }
 
-export async function openApp(path: string): Promise<Mounted> {
-  const router = createAppRouter(createMemoryHistory())
-  await router.push(path)
-  await router.isReady()
-  render(App, { global: { plugins: [router, [VueQueryPlugin, { queryClient: new QueryClient(queryClientConfig) }]] } })
-  return { router, user: userEvent.setup() }
+export interface Opening {
+  /** Called instead of reloading the browser when a view's script is missing. */
+  reload?: (path: string) => void
+  /** Routes to add before the first navigation, for a test that needs one that fails. */
+  routes?: RouteRecordRaw[]
+}
+
+/** Opens the page at `path` the way a link or a typed address does: it is the first navigation of the page load. */
+export async function openApp(path: string, opening: Opening = {}): Promise<Mounted> {
+  const router = createAppRouter(createMemoryHistory(), opening.reload ?? (() => undefined))
+  for (const route of opening.routes ?? []) router.addRoute(route)
+  const queries = new QueryClient(queryClientConfig)
+  // Asked for before the navigation, as main.ts does: a router whose first navigation has already failed never
+  // settles a readiness promise requested afterwards.
+  const ready = router.isReady().catch(() => undefined)
+  await router.push(path).catch(() => undefined)
+  await ready
+  render(App, { global: { plugins: [router, [VueQueryPlugin, { queryClient: queries }]] } })
+  return { router, user: userEvent.setup(), queries }
 }
 
 /** Opens the page at `path` as `subject`, through the sign-in page, the way a person gets there. */

@@ -17,6 +17,14 @@ export function holdToken(subject: string, token: string, until: number): void {
   held.set(subject, { token, until })
 }
 
+/** Counts sign-outs. A token asked for before a sign-out and delivered after it belongs to a session that is over. */
+let signOuts = 0
+
+export function tokenEpoch(): number {
+  return signOuts
+}
+
 export function forgetTokens(): void {
   held.clear()
+  signOuts += 1
 }

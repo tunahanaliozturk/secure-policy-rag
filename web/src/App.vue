@@ -2,6 +2,7 @@
 import { useQueryClient } from '@tanstack/vue-query'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
 
+import { loadFailure } from '@/router'
 import { forgetTokens } from '@/shared/api/tokens'
 import { signedIn, signOut } from '@/shared/session'
 
@@ -9,10 +10,12 @@ const router = useRouter()
 const queries = useQueryClient()
 
 // Signing out drops everything this person could see from memory: the tokens, and every answer and excerpt the page
-// has cached, so the next person does not start on the last one's reading.
+// has cached, so the next person does not start on the last one's reading. It also ends what is under way: requests
+// in flight are cancelled, and a token still on its way from the login is thrown away when it lands (tokens.ts).
 async function leave(): Promise<void> {
   signOut()
   forgetTokens()
+  await queries.cancelQueries()
   queries.clear()
   await router.push({ name: 'sign-in' })
 }
@@ -41,7 +44,14 @@ async function leave(): Promise<void> {
     </div>
   </header>
   <main id="content" tabindex="-1">
-    <RouterView />
+    <!-- In place of the view, not above it: the page that was asked for is not there, and the one before it is not
+         what the person wanted. The heading keeps the page a page for a screen reader. -->
+    <div v-if="loadFailure !== null" class="unloaded" role="alert">
+      <h1>This page could not be loaded</h1>
+      <p>A part of it did not arrive from the server. Check the connection, then load it again.</p>
+      <a :href="loadFailure">Load it again</a>
+    </div>
+    <RouterView v-else />
   </main>
   <footer>
     <p>A demonstration. The policies, the people and every identifier in them are invented.</p>
@@ -138,6 +148,24 @@ main {
 
 main:focus {
   outline: none;
+}
+
+.unloaded {
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--red);
+  background: var(--red-wash);
+}
+
+.unloaded p {
+  margin: 0 0 0.15rem;
+}
+
+.unloaded h1 {
+  margin: 0 0 0.15rem;
+  color: var(--red);
+  font-size: 1.125rem;
+  font-weight: 650;
 }
 
 footer {

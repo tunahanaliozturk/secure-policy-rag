@@ -56,7 +56,7 @@ export default defineConfig({
       exclude: ['src/**/*.test.ts', 'src/**/*.d.ts', 'src/main.ts', 'src/test/**'],
       reporter: ['text-summary', 'html'],
       // What the suite holds today, rounded down. A drop below it is a change someone should look at.
-      thresholds: { statements: 98, branches: 94, functions: 100, lines: 99 },
+      thresholds: { statements: 99, branches: 94, functions: 100, lines: 99 },
     },
   },
 })

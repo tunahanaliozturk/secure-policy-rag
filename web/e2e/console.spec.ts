@@ -96,9 +96,24 @@ test('a person signs in, asks, and gets an answer that cites a source', async ({
 })
 
 test('the same question as six people: erin is answered from the runbook, dave cannot open it', async ({ page }) => {
+  // Opened from a link, the question is in the box and nothing has been asked: one press here is six questions.
+  const sent: string[] = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (path.startsWith('/api/') || path === '/login/token') sent.push(`${request.method()} ${path}`)
+  })
   await page.goto(`/compare?q=${encodeURIComponent(CROWN_JEWELS)}`)
+  await expect(page.getByRole('status').first()).toHaveText(
+    'This question came with the link and has not been sent. Press Ask as all six to send it.',
+  )
+  await expect(page.getByRole('textbox', { name: 'Question' })).toHaveValue(CROWN_JEWELS)
+  await expect(page.getByRole('table')).toHaveCount(0)
+  expect(sent).toEqual([])
+
+  await page.getByRole('button', { name: 'Ask as all six' }).click()
   const table = page.getByRole('table', { name: 'One question, six readers' })
   await expect(table.getByRole('row')).toHaveCount(7)
+  expect(sent.filter((request) => request === 'POST /api/ask')).toHaveLength(6)
   await expect(table.getByText('Checking')).toHaveCount(0)
 
   // Which sources were cited at all: the restricted runbook, and something everybody may read.
@@ -176,7 +191,10 @@ test('a cited source opens as the person who asked, and closes back to its link'
 
 test('a source the person may not read cannot be opened by editing the address', async ({ page }) => {
   // The address of erin's opened runbook, typed in by someone who then signs in as dave.
-  const excerptAnswered = page.waitForResponse((response) => response.url().includes('/api/excerpts/'))
+  // Read the moment it arrives: the answer is sent with no-store, so the browser does not keep it for later.
+  const excerptAnswered = page
+    .waitForResponse((response) => response.url().includes('/api/excerpts/'))
+    .then(async (response) => ({ status: response.status(), body: await response.text() }))
   await page.goto(`${asked(CROWN_JEWELS)}&source=${encodeURIComponent(RUNBOOK)}`)
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in as a member of staff' })).toBeVisible()
   await signInAs(page, 'dave')
@@ -191,8 +209,8 @@ test('a source the person may not read cannot be opened by editing the address',
   const refused = await excerptAnswered
   const headers = { Authorization: `Bearer ${await tokenFor(page, 'dave')}` }
   const absent = await page.request.get('/api/excerpts/SEC-999%232', { headers })
-  expect([refused.status(), absent.status()]).toEqual([404, 404])
-  expect(await refused.text()).toBe(await absent.text())
+  expect([refused.status, absent.status()]).toEqual([404, 404])
+  expect(refused.body).toBe(await absent.text())
 })
 
 test('the whole path works with the keyboard alone', async ({ page }) => {
@@ -285,4 +303,25 @@ test('every response on the one origin carries the security headers, the proxied
     expect(headers['x-content-type-options'], path).toBe('nosniff')
     expect(headers['referrer-policy'], path).toBe('no-referrer')
   }
+})
+
+test('a view whose script is gone reloads once, then says the page could not be loaded', async ({ page }) => {
+  // After a deploy the script this page knows by name no longer exists. Without handling, the click does nothing.
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: 'Sign in as alice' })).toBeVisible()
+  await page.route('**/assets/CompareView-*.js', (route) => route.abort())
+
+  await page.getByRole('link', { name: 'Ask as everyone' }).click()
+
+  // One reload, to the address the person was going to. The script is still missing, so the page says so.
+  await expect(page).toHaveURL(/\/compare$/)
+  const alert = page.getByRole('alert')
+  await expect(alert).toContainText('This page could not be loaded')
+  await expectNoAxeViolations(page)
+
+  await page.unroute('**/assets/CompareView-*.js')
+  await alert.getByRole('link', { name: 'Load it again' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Ask as everyone' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  expect(await page.evaluate(() => sessionStorage.length)).toBe(0)
 })

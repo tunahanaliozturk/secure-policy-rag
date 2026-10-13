@@ -67,6 +67,11 @@ export function describeFailure(failure: Failure, who: string): Wording {
       }
     case 'page':
       return { title: 'This page failed', detail: 'The page hit an error of its own. Reload it and try again.' }
+    case 'cancelled':
+      return {
+        title: 'Signed out',
+        detail: 'The request was dropped because the person signed out before it finished.',
+      }
   }
 }
 

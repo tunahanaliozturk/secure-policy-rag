@@ -28,6 +28,8 @@ export type Failure =
   | { kind: 'contract' }
   /** Not a request at all: this page's own code threw. */
   | { kind: 'page' }
+  /** Dropped because the person signed out while it was under way. */
+  | { kind: 'cancelled' }
 
 export class ApiError extends Error {
   constructor(readonly failure: Failure) {
@@ -42,6 +44,9 @@ export type _UnavailableMatchesTheServer = Holds<
 >
 
 async function failureOf(response: Response): Promise<Failure> {
+  // The body is read to its end whatever the status, though only a 5xx has anything this page uses. A body nobody
+  // reads keeps the request in flight in the browser, and these answers are sent no-store, so nothing else ends it.
+  const body: unknown = await response.json().catch(() => null)
   if (response.status === 401) return { kind: 'unauthorised' }
   if (response.status === 404) return { kind: 'not_found' }
   if (response.status === 429) {
@@ -49,8 +54,8 @@ async function failureOf(response: Response): Promise<Failure> {
     return { kind: 'rate_limited', retryAfterSeconds: Number.isNaN(seconds) ? null : seconds }
   }
   if (response.status >= 500) {
-    const body = UnavailableSchema.safeParse(await response.json().catch(() => null))
-    return { kind: 'unavailable', reference: body.success ? body.data.reference : null }
+    const unavailable = UnavailableSchema.safeParse(body)
+    return { kind: 'unavailable', reference: unavailable.success ? unavailable.data.reference : null }
   }
   return { kind: 'rejected', status: response.status }
 }

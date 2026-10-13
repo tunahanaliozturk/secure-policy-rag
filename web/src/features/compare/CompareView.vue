@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useMutation, useQuery } from '@tanstack/vue-query'
-import { computed, nextTick, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter, type RouteLocationRaw } from 'vue-router'
 
 import { failureIn } from '@/shared/api/http'
@@ -20,7 +20,12 @@ import SourceHeading from './SourceHeading.vue'
 
 // One question, asked as all six people at once, each with their own token. The table then shows two things the
 // server said: what each person was told, and, for every source anyone cited, whether each person may open it.
-const props = defineProps<{ question: string; open: { source: string; reader: string } | null }>()
+const props = defineProps<{
+  question: string
+  open: { source: string; reader: string } | null
+  /** True when this address was how the page was opened, not somewhere the person went inside it (router.ts). */
+  byLink: boolean
+}>()
 
 type Row = { person: Person } & Asked
 
@@ -34,21 +39,50 @@ const asking = useMutation({
     ),
 })
 
+// A question that arrives in the address this page was opened at is shown in the box and not sent. One request here
+// is six questions, six model calls with a real model behind it, and six audit rows: a link someone was sent must
+// not be able to spend that by being opened. It is sent when the person presses the button.
+const unsent = ref(props.byLink && props.question !== '' ? props.question : null)
+const holding = computed(() => unsent.value !== null && unsent.value === props.question)
+
 watch(
-  () => [props.question, roster.data.value] as const,
-  ([question, staff]) => {
-    if (question === '' || staff === undefined) asking.reset()
+  () => [props.question, roster.data.value, holding.value] as const,
+  ([question, staff, held]) => {
+    if (question === '' || staff === undefined || held) asking.reset()
     else asking.mutate({ question, staff })
   },
   { immediate: true },
 )
 
 function submit(question: string): void {
+  const wasHolding = holding.value
+  unsent.value = null
+  if (question !== props.question) {
+    void router.push({ name: 'compare', query: { q: question } })
+    return
+  }
+  // The same question again is a new request, but not a new address. One that was being held is sent by the watch
+  // above the moment it is released, and one pressed before the six people have loaded is sent when they arrive.
   const staff = roster.data.value
-  if (staff === undefined) return
-  if (question === props.question) asking.mutate({ question, staff })
-  else void router.push({ name: 'compare', query: { q: question } })
+  if (!wasHolding && staff !== undefined) asking.mutate({ question, staff })
 }
+
+// A source is opened as one of the six. A reader the login does not list is not a person to open anything as, so it
+// is dropped from the address before anything is asked on its behalf.
+const reading = computed(() => {
+  const opened = props.open
+  if (opened === null) return null
+  return roster.data.value?.some((person) => person.subject === opened.reader) === true ? opened : null
+})
+
+watch(
+  () => [props.open, roster.data.value] as const,
+  ([opened, staff]) => {
+    if (opened === null || staff === undefined || staff.some((person) => person.subject === opened.reader)) return
+    void router.replace({ name: 'compare', query: props.question === '' ? {} : { q: props.question } })
+  },
+  { immediate: true },
+)
 
 const rows = computed(() => asking.data.value ?? [])
 
@@ -90,6 +124,9 @@ const askingFailure = computed(() => (asking.error.value === null ? null : failu
 
 const status = computed(() => {
   if (roster.isPending.value) return 'Loading the six people.'
+  if (holding.value) {
+    return 'This question came with the link and has not been sent. Press Ask as all six to send it.'
+  }
   if (asking.isPending.value) return `Asking as ${roster.data.value?.length ?? 0} people.`
   if (rows.value.length === 0) return ''
   const counts = new Map<string, number>()
@@ -184,7 +221,7 @@ const status = computed(() => {
       </p>
     </template>
 
-    <ExcerptPanel v-if="open !== null" :subject="open.reader" :chunk-id="open.source" @close="closeSource" />
+    <ExcerptPanel v-if="reading !== null" :subject="reading.reader" :chunk-id="reading.source" @close="closeSource" />
   </div>
 </template>
 

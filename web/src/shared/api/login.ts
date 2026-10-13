@@ -6,7 +6,7 @@ import { z } from 'zod'
 import type { Exact, Holds } from './contract'
 import { ApiError, send } from './http'
 import type { components, paths } from './login.schema'
-import { heldToken, holdToken } from './tokens'
+import { heldToken, holdToken, tokenEpoch } from './tokens'
 
 type Wire = components['schemas']
 
@@ -40,6 +40,7 @@ export async function people(signal?: AbortSignal): Promise<Person[]> {
 export async function tokenFor(subject: string, fresh = false): Promise<string> {
   const current = fresh ? null : heldToken(subject)
   if (current !== null) return current
+  const epoch = tokenEpoch()
   const issued = await send(
     `/login${TOKEN}`,
     {
@@ -49,6 +50,9 @@ export async function tokenFor(subject: string, fresh = false): Promise<string> 
     },
     IssuedSchema,
   )
+  // The person signed out while the login was answering. The token is not kept, and the request that wanted it is
+  // not sent: signing out ends what was under way, not only what was already on the page.
+  if (epoch !== tokenEpoch()) throw new ApiError({ kind: 'cancelled' })
   holdToken(subject, issued.token, Date.parse(issued.expires_at))
   return issued.token
 }

@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { cleanup, screen, within } from '@testing-library/vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createMemoryHistory } from 'vue-router'
 
 import { afterSignIn, createAppRouter } from '@/router'
-import { forgetTokens } from '@/shared/api/tokens'
+import { forgetTokens, heldToken } from '@/shared/api/tokens'
 import { signOut } from '@/shared/session'
 import { openApp, openAppAs, words } from '@/test/app'
-import { fakeServer, held, json, PEOPLE, policyRoutes } from '@/test/server'
+import { ACCEPTABLE_USE, fakeServer, held, json, PEOPLE, policyRoutes } from '@/test/server'
 
 afterEach(() => {
   cleanup()
@@ -102,15 +103,26 @@ describe('signing in', () => {
     expect(router.currentRoute.value.query).toEqual({ q: 'How long must my password be?' })
   })
 
-  it('signs out by forgetting the person and the token', async () => {
+  it('signs out by forgetting the person, the token, and everything the page had read as them', async () => {
     const server = fakeServer(policyRoutes())
-    const { router, user } = await openAppAs('dave', '/ask')
+    const { router, user, queries } = await openAppAs('dave', '/ask?q=anything&source=SEC-001%234')
+    await screen.findByText(ACCEPTABLE_USE.text)
+    expect(heldToken('dave')).toBe('token-dave-1')
+    expect(queries.getQueryCache().findAll({ queryKey: ['excerpt'] })).toHaveLength(1)
+    expect(queries.getMutationCache().getAll().length).toBeGreaterThan(0)
 
     await user.click(screen.getByRole('button', { name: 'Sign out' }))
 
     expect(await screen.findByText('Nobody is signed in')).toBeTruthy()
     expect(router.currentRoute.value.name).toBe('sign-in')
-    await user.click(await screen.findByRole('button', { name: 'Sign in as dave' }))
+    expect(heldToken('dave')).toBeNull()
+    expect(queries.getQueryCache().findAll({ queryKey: ['excerpt'] })).toEqual([])
+    expect(queries.getMutationCache().getAll()).toEqual([])
+    // The list of people was dropped with the rest, so the sign-in page asks for it again.
+    await screen.findByRole('button', { name: 'Sign in as dave' })
+    expect(server.to('GET /login/identities')).toHaveLength(2)
+
+    await user.click(screen.getByRole('button', { name: 'Sign in as dave' }))
     await screen.findByRole('heading', { level: 1, name: 'Ask the policy library' })
     expect(server.to('POST /login/token')).toHaveLength(2)
   })
@@ -129,7 +141,7 @@ describe('signing in', () => {
 })
 
 describe('where sign-in leads', () => {
-  const router = createAppRouter()
+  const router = createAppRouter(createMemoryHistory(), () => undefined)
 
   it('follows next only to a page of this app', () => {
     expect(afterSignIn(router, '/compare?q=x')).toBe('/compare?q=x')

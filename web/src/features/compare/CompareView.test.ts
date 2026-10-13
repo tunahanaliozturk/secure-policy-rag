@@ -2,9 +2,9 @@
 import { cleanup, screen, waitFor, within } from '@testing-library/vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { forgetTokens } from '@/shared/api/tokens'
+import { forgetTokens, heldToken } from '@/shared/api/tokens'
 import { signOut } from '@/shared/session'
-import { openApp, words } from '@/test/app'
+import { openApp, openAppAs, words } from '@/test/app'
 import {
   ACCEPTABLE_USE,
   answer,
@@ -28,6 +28,16 @@ afterEach(() => {
 const compared = `/compare?q=${encodeURIComponent(CROWN_JEWELS)}`
 const status = (): string => screen.getAllByRole('status')[0]?.textContent ?? ''
 
+/**
+ * Opens a comparison address the way a link does, then presses the button. A question that arrives with a link is
+ * not sent until someone asks for it.
+ */
+async function openCompared(path = compared): Promise<Awaited<ReturnType<typeof openApp>>> {
+  const mounted = await openApp(path)
+  await mounted.user.click(screen.getByRole('button', { name: 'Ask as all six' }))
+  return mounted
+}
+
 /** The table as rows of cell text, once every cell has stopped checking. */
 async function ledger(): Promise<string[][]> {
   const table = await screen.findByRole('table')
@@ -50,7 +60,7 @@ describe('asking as everyone', () => {
 
   it('sends the question once as each of the six people, each with their own token', async () => {
     const server = fakeServer(policyRoutes())
-    await openApp(compared)
+    await openCompared()
     await ledger()
 
     const asks = server.to('POST /api/ask')
@@ -62,7 +72,7 @@ describe('asking as everyone', () => {
 
   it('shows who cited which source, and for every cited source who else may open it', async () => {
     fakeServer(policyRoutes())
-    await openApp(compared)
+    await openCompared()
 
     const [head, ...body] = await ledger()
 
@@ -86,7 +96,7 @@ describe('asking as everyone', () => {
 
   it('checks every cell by asking the server as that person, never by working it out', async () => {
     const server = fakeServer(policyRoutes())
-    await openApp(compared)
+    await openCompared()
     await ledger()
 
     const reads = server.calls.filter((call) => call.path.startsWith('/api/excerpts/'))
@@ -99,7 +109,7 @@ describe('asking as everyone', () => {
     const reply = held()
     // Six requests wait on one release; each needs a body of its own to read.
     fakeServer({ ...policyRoutes(), 'POST /api/ask': () => reply.response.then((response) => response.clone()) })
-    await openApp(compared)
+    await openCompared()
 
     await waitFor(() => expect(status()).toBe('Asking as 6 people.'))
     expect(screen.getByRole('button', { name: 'Ask as all six' })).toHaveProperty('disabled', true)
@@ -117,7 +127,7 @@ describe('asking as everyone', () => {
           ? json({ outcome: 'refused', answer: 'Not from your policies.', citations: [], question_redactions: {} })
           : json(answer(subjectOf(call) === 'erin' ? RUNBOOK : ACCEPTABLE_USE)),
     })
-    await openApp(compared)
+    await openCompared()
 
     const [, ...body] = await ledger()
 
@@ -133,7 +143,7 @@ describe('asking as everyone', () => {
           ? json({ detail: 'too many requests' }, 429, { 'Retry-After': '9' })
           : json(answer(subjectOf(call) === 'erin' ? RUNBOOK : ACCEPTABLE_USE)),
     })
-    await openApp(compared)
+    await openCompared()
 
     const [, ...body] = await ledger()
 
@@ -151,7 +161,7 @@ describe('asking as everyone', () => {
         return json({ detail: 'no such excerpt' }, 404)
       },
     })
-    await openApp(compared)
+    await openCompared()
 
     const [, ...body] = await ledger()
 
@@ -161,7 +171,7 @@ describe('asking as everyone', () => {
 
   it('opens a source as the person whose mark was selected, and closes it back to that mark', async () => {
     const server = fakeServer(policyRoutes())
-    const { router, user } = await openApp(compared)
+    const { router, user } = await openCompared()
     await ledger()
 
     await user.click(screen.getByRole('link', { name: 'Cited: open SEC-004#2 as erin' }))
@@ -180,7 +190,7 @@ describe('asking as everyone', () => {
 
   it('offers no way to open a source for a person the server refused, and refuses an address that tries', async () => {
     fakeServer(policyRoutes())
-    await openApp(`${compared}&source=SEC-004%232&reader=dave`)
+    await openCompared(`${compared}&source=SEC-004%232&reader=dave`)
     await ledger()
 
     expect(screen.queryByRole('link', { name: /open SEC-004#2 as dave/ })).toBeNull()
@@ -191,7 +201,7 @@ describe('asking as everyone', () => {
 
   it('asks a new question from the box and drops the opened source', async () => {
     const server = fakeServer(policyRoutes())
-    const { router, user } = await openApp(`${compared}&source=SEC-004%232&reader=erin`)
+    const { router, user } = await openCompared(`${compared}&source=SEC-004%232&reader=erin`)
     await ledger()
 
     await user.clear(screen.getByRole('textbox', { name: 'Question' }))
@@ -205,7 +215,7 @@ describe('asking as everyone', () => {
 
   it('says what failed when the six people cannot be loaded, and asks nothing', async () => {
     const server = fakeServer({ ...policyRoutes(), 'GET /login/identities': () => json({ detail: 'x' }, 503) })
-    const { user } = await openApp(compared)
+    const { user } = await openCompared()
 
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('The assistant is unavailable')
@@ -215,5 +225,76 @@ describe('asking as everyone', () => {
     await user.click(within(alert).getByRole('button', { name: 'Try again' }))
 
     expect((await ledger()).length).toBe(7)
+  })
+
+  it('does not send a question that arrived with the link until someone presses the button', async () => {
+    const server = fakeServer(policyRoutes())
+    const { user } = await openApp(compared)
+
+    expect(screen.getByRole('textbox', { name: 'Question' })).toHaveProperty('value', CROWN_JEWELS)
+    await waitFor(() =>
+      expect(status()).toBe('This question came with the link and has not been sent. Press Ask as all six to send it.'),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(server.calls.filter((call) => call.path.startsWith('/api/'))).toEqual([])
+    expect(server.to('POST /login/token')).toEqual([])
+    expect(screen.queryByRole('table')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Ask as all six' }))
+
+    expect((await ledger()).length).toBe(7)
+    expect(server.to('POST /api/ask')).toHaveLength(6)
+  })
+
+  it('sends a question chosen inside the page at once', async () => {
+    const server = fakeServer(policyRoutes())
+    const { user } = await openApp('/compare')
+
+    await user.click(screen.getByRole('button', { name: CROWN_JEWELS }))
+
+    expect((await ledger()).length).toBe(7)
+    expect(server.to('POST /api/ask')).toHaveLength(6)
+  })
+
+  it('sends it when the button is pressed before the six people have loaded', async () => {
+    const identities = held()
+    const server = fakeServer({ ...policyRoutes(), 'GET /login/identities': () => identities.response })
+    const { user } = await openApp(compared)
+
+    await user.click(screen.getByRole('button', { name: 'Ask as all six' }))
+    identities.release(json({ identities: PEOPLE }))
+
+    expect((await ledger()).length).toBe(7)
+    expect(server.to('POST /api/ask')).toHaveLength(6)
+  })
+
+  it('opens nothing for a reader who is not one of the six, asks the login nothing, and drops them from the address', async () => {
+    const server = fakeServer(policyRoutes())
+    const { router } = await openApp(`${compared}&source=SEC-004%232&reader=mallory`)
+
+    await waitFor(() => expect(router.currentRoute.value.query).toEqual({ q: CROWN_JEWELS }))
+    expect(screen.queryByRole('region', { name: /opened as/ })).toBeNull()
+    expect(screen.queryByText(/mallory/)).toBeNull()
+    expect(server.to('POST /login/token')).toEqual([])
+    // Dropping the reader is not a reason to send the question that came with the link.
+    expect(server.to('POST /api/ask')).toEqual([])
+  })
+
+  it('stops when the person signs out while the other five tokens are still on their way', async () => {
+    const server = fakeServer(policyRoutes())
+    const { user } = await openAppAs('dave', '/compare')
+    const issued = held()
+    server.on('POST /login/token', () => issued.response.then((response) => response.clone()))
+
+    await user.click(screen.getByRole('button', { name: CROWN_JEWELS }))
+    await waitFor(() => expect(server.to('POST /login/token')).toHaveLength(6))
+    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+    const expires = new Date(Date.now() + 600_000).toISOString()
+    issued.release(json({ ...PEOPLE[0], token: 'token-late', expires_at: expires }))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    // Dave was signed in and had a token, so his question went out before he signed out. Nobody else's did.
+    expect(server.to('POST /api/ask').map((call) => call.bearer)).toEqual(['token-dave-1'])
+    expect(PEOPLE.map((person) => heldToken(person.subject))).toEqual([null, null, null, null, null, null])
   })
 })

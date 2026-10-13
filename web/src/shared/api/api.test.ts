@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { answer, fakeServer, json, RUNBOOK, subjectOf } from '@/test/server'
+import { answer, fakeServer, held, json, PEOPLE, RUNBOOK, subjectOf } from '@/test/server'
 
 import { ApiError, failureIn } from './http'
 import { people, signedInAs, tokenFor } from './login'
 import { ask, askSettled, excerpt } from './policy'
-import { forgetTokens } from './tokens'
+import { forgetTokens, heldToken } from './tokens'
 
 beforeEach(() => {
   vi.useFakeTimers({ now: new Date('2026-10-13T12:00:00Z') })
@@ -73,6 +73,23 @@ describe('the demo login', () => {
     forgetTokens()
 
     expect(await tokenFor('dave')).toBe('token-dave-2')
+  })
+
+  it('drops a token that arrives after sign-out, keeps nothing, and sends nothing with it', async () => {
+    const issued = held()
+    const server = fakeServer({
+      'POST /login/token': () => issued.response,
+      'POST /api/ask': () => json(answer(RUNBOOK)),
+    })
+    const asking = failed(ask('alice', 'anything'))
+
+    forgetTokens()
+    const expires = new Date(Date.now() + 600_000).toISOString()
+    issued.release(json({ ...PEOPLE[0], token: 'token-alice-1', expires_at: expires }))
+
+    expect(await asking).toEqual({ kind: 'cancelled' })
+    expect(heldToken('alice')).toBeNull()
+    expect(server.to('POST /api/ask')).toEqual([])
   })
 
   it('reports a name the login does not know as not found, and a token that is not one as a broken contract', async () => {
@@ -157,6 +174,19 @@ describe('what a failed request is called', () => {
 
     expect(await failed(ask('dave', 'anything'))).toEqual(failure)
   })
+
+  it.each([401, 404, 422, 429, 503])(
+    'reads the body of a %i to its end, so the request is not left open',
+    async (status) => {
+      // A refusal whose body nobody reads stays in flight in the browser: with no-store, Chromium never finishes it.
+      const refusal = json({ detail: 'refused' }, status)
+      fakeServer({ 'GET /api/excerpts/SEC-004%232': () => refusal })
+
+      await failed(excerpt('dave', 'SEC-004#2'))
+
+      expect(refusal.bodyUsed).toBe(true)
+    },
+  )
 
   it('says the network failed when no answer came at all', async () => {
     fakeServer({ 'POST /api/ask': () => Promise.reject(new TypeError('fetch failed')) })

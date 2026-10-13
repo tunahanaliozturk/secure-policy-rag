@@ -25,7 +25,8 @@ This is a demonstration system with synthetic data. Known gaps are listed in
 application sets, names are not detected as personal data, demo tokens cannot be revoked, and a persuasive injection
 that produces a false but cited statement is not caught.
 
-The demo login (`spr demo-login`, port 8441 in compose) hands a token to anyone who names one of six people. That is
+The demo login (`spr demo-login`, port 8441 in compose, and port 8440 under `/login/` behind the console's nginx)
+hands a token to anyone who names one of six people. That is
 deliberate and written down in [ADR 10](docs/adr/0010-the-demo-login-is-a-separate-process.md); it is a finding only
 if it can be made to do more than that. Do not run it where a stranger can reach it.
 

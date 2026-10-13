@@ -20,7 +20,7 @@ against the code by `tests/unit/test_docs.py`, so a renamed setting fails the bu
 | `SPR_RETRIEVERS` | `hybrid` | `vector` scored higher on the current evaluation set (ADR 7). Changing it needs a new `eval/baseline.json`. |
 | `SPR_ALLOWED_LINK_HOSTS` | `intranet.bank.example` | Comma-separated. Every host added is a host a poisoned document can get shown to staff. |
 | `SPR_TOP_K` | `5` | More excerpts per prompt: more context, more input tokens, more room for an injected document to be included. |
-| `SPR_RATE_LIMIT_PER_MINUTE` | `20` | Per verified subject, per process. Questions and excerpt requests draw on the same allowance. Compose sets 60, because one comparison in the console sends a question and up to six excerpt requests as each person. |
+| `SPR_RATE_LIMIT_PER_MINUTE` | `20` | Per verified subject, per process. Questions and excerpt requests draw on the same allowance. Compose sets 60: with the scripted model one comparison in the console sends a question and at most six excerpt requests as each person. A real model can cite up to five sources per person, which can be 30 excerpt requests per person for one comparison: over the default of 20, and enough that a second comparison within the minute passes 60. A cell the limit refused reads "Not checked: Too many requests". |
 | `SPR_TRACE_EXPORTER` | `console` | `none` switches tracing off. Spans hold ids and counts, never text. |
 | `SPR_LOG_LEVEL` | `INFO` | Logs hold ids, counts and outcomes, never question or answer text. |
 | `ANTHROPIC_API_KEY` | unset | Read by the Anthropic SDK when `SPR_MODEL_PROVIDER=anthropic`. |
@@ -39,25 +39,26 @@ Everything is bound to 127.0.0.1. The demo login must stay that way: whoever rea
 
 The console as nginx serves it, measured on 2026-10-13 with Lighthouse 12.6.1 in Chrome 154 against the compose
 stack on an Intel Core Ultra 7 255H laptop, phone emulation with Lighthouse's simulated throttling (150 ms round
-trip, 1.6 Mbit/s, 4x CPU slowdown), two sessions of three runs each on the sign-in page:
+trip, 1.6 Mbit/s, 4x CPU slowdown), three sessions of three runs each on the sign-in page. The third is the
+build as released, on 2026-10-14:
 
-| Measure | First session | Second session | Gate in `web/lighthouserc.json` |
-|---|---|---|---|
-| Performance score | 0.99, 0.99, 0.99 | 0.99, 0.95, 0.99 | at least 0.95 |
-| Accessibility score | 1.0 | 1.0 | 1.0 |
-| Largest contentful paint | 1,731, 1,720, 1,804 ms | 1,721, 2,004, 1,843 ms | under 2,500 ms |
-| Cumulative layout shift | 0 | 0 | under 0.1 |
-| Total blocking time | 12, 6, 21 ms | 7, 213, 40 ms | under 200 ms |
-| Transfer for the first page, 10 requests | 85,300 bytes, of which 79,524 script | 85,300 bytes | none; `size-limit` bounds the build |
+| Measure | First session | Second session | Third session | Gate in `web/lighthouserc.json` |
+|---|---|---|---|---|
+| Performance score | 0.99, 0.99, 0.99 | 0.99, 0.95, 0.99 | 0.99, 0.99, 0.99 | median at least 0.95 |
+| Accessibility score | 1.0 | 1.0 | 1.0 | 1.0 |
+| Largest contentful paint | 1,731, 1,720, 1,804 ms | 1,721, 2,004, 1,843 ms | 1,708, 1,726, 1,742 ms | median under 2,500 ms |
+| Cumulative layout shift | 0 | 0 | 0 | under 0.1 |
+| Total blocking time | 12, 6, 21 ms | 7, 213, 40 ms | 2, 4, 16 ms | median under 200 ms |
+| Transfer for the first page, 10 requests | 85,300 bytes, of which 79,524 script | 85,300 bytes | 85,865 bytes, of which 80,006 script | none; `size-limit` bounds the build |
 
-One run in six blocked for 213 ms, above the 200 ms limit, and the gate still passed. Lighthouse CI judges each limit
-on the best of its three runs unless told otherwise, and `lighthouserc.json` does not tell it otherwise. So the gate
-catches a page that is slow in every run, and lets through one that is slow in one run of three. The second session
-ran straight after the browser journeys on the same laptop, which is the likeliest reason for that run; it was not
-investigated further.
+One run in nine blocked for 213 ms, above the 200 ms limit. Lighthouse CI judges each limit on the best of its three
+runs unless told otherwise, so that run passed the gate as it was first written. The assertions now name
+`aggregationMethod: median`: on those three stored runs (7, 213 and 40 ms) a 30 ms limit exits 0 by default and 1
+with the median, which reports 40. The second session ran straight after the browser journeys on the same laptop,
+which is the likeliest reason for that run; it was not investigated further.
 
-`size-limit` on the build: entry chunk 9.49 kB gzip against a 12 kB limit, and every script and style of all three
-routes together 88.42 kB against 100 kB. nginx compresses at level 6; at its default, level 1, the largest script was
+`size-limit` on the build: entry chunk 9.95 kB gzip against a 12 kB limit, and every script and style of all three
+routes together 89.14 kB against 100 kB. nginx compresses at level 6; at its default, level 1, the largest script was
 43,544 bytes on the wire instead of 37,980.
 
 ## What to watch
@@ -79,7 +80,10 @@ where at > now() - interval '7 days' group by key;
 -- Who asked to open excerpts the database did not show them, and how often. One or two is a mistyped link.
 -- A long run of different ids from one person is someone walking the id space.
 select subject, count(*) as refused, count(distinct chunk_id) as different_ids from excerpt_log
-where not found and at > now() - interval '1 day' group by subject order by refused desc;
+where outcome = 'not_found' and at > now() - interval '1 day' group by subject order by refused desc;
+
+-- Excerpt reads that failed in the database. Any is worth a look: the caller got a 503 with a reference.
+select at, subject, chunk_id from excerpt_log where outcome = 'error' and at > now() - interval '1 day';
 ```
 
 The console's comparison view fills `excerpt_log` with refused reads by design: it asks for every cited source as
@@ -121,7 +125,7 @@ select at, subject, departments, clearance, retrieved_chunk_ids from audit_log
 where '<chunk id>' = any(retrieved_chunk_ids) order by at desc;
 
 select at, subject, departments, clearance from excerpt_log
-where chunk_id = '<chunk id>' and found order by at desc;
+where chunk_id = '<chunk id>' and outcome = 'found' order by at desc;
 ```
 
 If the subject's clearance and departments allow that chunk under the rule in ADR 2, the system worked and the
@@ -139,8 +143,10 @@ rotated, keep the old one in `SPR_TOKEN_SECRET_PREVIOUS` for an hour so signed-i
 ### The console says "The assistant is unavailable" and gives no reference
 
 A failure inside the API always comes with a reference, so no reference means nginx answered instead: it could not
-reach the API. Confirm: `docker compose logs web` shows 502 or 504 for `/api/` requests, and `docker compose ps`
-shows whether `api` is down, restarting or was recreated. Act: if `api` is down, start it; the console recovers on
+reach the API. Confirm: `docker compose logs web` shows 502 or 504 for `/api/` requests, with `upstream=502` or
+`upstream=-` on the line, and `docker compose ps` shows whether `api` is down, restarting or was recreated. nginx
+writes no error-level lines here, because it puts the request line and the Referer into every one of them and the
+question is in the console's address; the access log line is what there is. Act: if `api` is down, start it; the console recovers on
 its own once it is healthy (checked by stopping and starting the container). If `api` is healthy and the 502s go on,
 nginx is still using the address the previous container had, because it resolves `api` and `login` when it starts:
 `docker compose restart web`. Verify: `http://127.0.0.1:8440/api/healthz` returns `{"status":"ok"}`.
@@ -188,6 +194,12 @@ pool, retrieval after an embedding went from 5.5 ms to 84 ms on a 16-thread lapt
 - The audit log and the excerpt log grow forever. A bank would set a retention period for them in the retention
   schedule, and partition them by month.
 - The demo login has no passwords and no rate limit of its own. It exists for the demo stack only (ADR 10).
+- The API and the login write no access log, and the console's nginx logs the path of a request without its query
+  string and nothing at error level. That keeps questions out of every log, and it means a failed upstream is one
+  access-log line with a status, not a paragraph. The pipeline's own log lines and spans are unchanged.
+- The console answers to `127.0.0.1` and `localhost` only. Opened under any other name, including the machine's own
+  host name, nginx closes the connection; add the name to `server_name` in `web/nginx.conf` and to
+  `spr demo-login --allow-host` to serve it elsewhere.
 - nginx in the `web` container resolves `api` and `login` once at start-up; recreate either and `web` needs a restart.
 - The console is English only and has a light theme only.
 - A reload of the console signs the person out: the token is kept in memory and nowhere else (ADR 11).

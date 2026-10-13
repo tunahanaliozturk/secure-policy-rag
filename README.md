@@ -23,7 +23,9 @@ not run.
 ## Try it in a browser
 
 After the quick start below, open <http://127.0.0.1:8440>. Sign in as one of the six demo people, ask a question, and
-open a cited source. Then choose "Ask as everyone": the same question goes out six times, once as each person.
+open a cited source. Then choose "Ask as everyone": the same question goes out six times, once as each person. A
+question that arrives with a link is shown and waits for the button, so opening an address never spends six
+questions by itself.
 
 ![One question asked as six people. Each row is a person, each tinted column a source somebody cited, and each cell says whether that person cited it, can read it, or has no access.](docs/images/ask-as-everyone.png)
 
@@ -121,6 +123,8 @@ policy document the assistant reads. [docs/threat-model.md](docs/threat-model.md
 | The API talked into issuing a token | It has no such route; the demo login is a separate process | `test_the_api_process_has_no_route_that_could_mint_a_token`, import contract |
 | Browser and server disagreeing about a response | Types generated from the OpenAPI documents, every response parsed, CI fails on drift | `contract` job; ADR 11 records the failing run |
 | A script on the page reading the token | Token in memory only, `default-src 'self'` on every response | journeys in `web/e2e/console.spec.ts` |
+| A question reaching a log through the address it sits in | The web log holds the path only; the servers log no address at all | `tools/smoke.py` sends a marked question and reads every log |
+| Another site's page reaching the passwordless login through your browser | The login and nginx answer to 127.0.0.1 and localhost only | `test_demo_login.py`, `tools/smoke.py` |
 
 ## Measured results
 
@@ -141,31 +145,33 @@ Latency of everything except the model call: 17.3 ms p50, 21.0 ms p95, 36.1 ms p
 first measurement was 89.7 ms p50: onnxruntime's default thread pool kept spinning after each embedding and starved the
 event loop. Capping it at two threads fixed it; the story is in the benchmark file.
 
-The browser console, measured on 2026-10-13 against the compose stack on the same laptop, with Lighthouse 12.6.1 in
-Chrome 154, phone emulation and Lighthouse's simulated throttling (150 ms round trip, 1.6 Mbit/s, 4x CPU slowdown),
-six runs of the sign-in page as nginx serves it, in two sessions ([docs/operations.md](docs/operations.md) lists each):
+The browser console, measured on 2026-10-13 and 2026-10-14 against the compose stack on the same laptop, with
+Lighthouse 12.6.1 in Chrome 154, phone emulation and Lighthouse's simulated throttling (150 ms round trip,
+1.6 Mbit/s, 4x CPU slowdown), nine runs of the sign-in page as nginx serves it, in three sessions
+([docs/operations.md](docs/operations.md) lists each):
 
 | Measure | Result | CI fails above or below |
 |---|---|---|
-| Lighthouse performance | 0.99 in five runs, 0.95 in one | below 0.95 |
+| Lighthouse performance | 0.99 in eight runs, 0.95 in one | median of three below 0.95 |
 | Lighthouse accessibility | 1.0 | below 1.0 |
-| Largest contentful paint | 1,720 to 2,004 ms | above 2,500 ms |
-| Total blocking time | 6 to 40 ms in five runs, 213 ms in one | above 200 ms, judged on the best of three runs |
+| Largest contentful paint | 1,708 to 2,004 ms | median above 2,500 ms |
+| Total blocking time | 2 to 40 ms in eight runs, 213 ms in one | median above 200 ms |
 | Cumulative layout shift | 0 | above 0.1 |
-| Every script and style of all three routes, gzip | 88.42 kB | above 100 kB (`web/.size-limit.json`) |
-| First page on the wire, 10 requests | 85,300 bytes, of which 79,524 script | not gated |
+| Every script and style of all three routes, gzip | 89.14 kB | above 100 kB (`web/.size-limit.json`) |
+| First page on the wire, 10 requests | 85,865 bytes, of which 80,006 script | not gated |
 | axe violations on every view the journeys visit | 0 | any |
 
-Lighthouse CI judges every limit on the best of its three runs, so the one slow run above did not fail the gate.
+Each limit is judged on the median of three runs. As first written the gate used Lighthouse CI's default, the best
+of three, and the one run at 213 ms passed it.
 
 Two of these were wrong before they were right, and the gates are how that was found. Lighthouse reported a content
 security policy violation on every load (the schema library probing for `eval`) and a layout shift of 0.114 (the page
 shell painted before its first view). Both are fixed, and every browser journey now fails on any reported violation
 ([ADR 11](docs/adr/0011-browser-console-generated-contract-parsed-responses-one-origin.md)).
 
-Tests: 109 unit tests (offline) and 73 integration tests (real Postgres in Docker) in Python; 81 unit and component
-tests for the console at 98.9 percent of statements and 94.1 percent of branches; 8 browser journeys, each run in
-Chromium and in Firefox against the compose stack.
+Tests: 125 unit tests (offline) and 82 integration tests (real Postgres in Docker) in Python; 98 unit and component
+tests for the console at 99.2 percent of statements and 94.5 percent of branches; 9 browser journeys, each run in
+Chromium and in Firefox against the compose stack. `tools/smoke.py` makes 44 checks against the running stack.
 
 ## Limitations
 

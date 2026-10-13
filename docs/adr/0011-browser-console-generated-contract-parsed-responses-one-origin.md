@@ -44,9 +44,31 @@ response carries `Content-Security-Policy: default-src 'self'` with no inline sc
   rendered (`AskView.test.ts`, "refuses to show an answer that does not match the contract").
 - The comparison view decides nothing about access. Each cell asks `GET /excerpts/{id}` with that person's token and
   shows the answer; `CompareView.test.ts` checks that all twelve requests are made for six people and two sources.
-  The cost: one comparison sends up to 6 questions and 36 excerpt requests, each recorded in `excerpt_log`, and the
-  browser console logs a 404 for every "No access" cell. Those 404s are the server's answer, not a fault. The demo
-  stack raises the per-person rate limit from 20 to 60 a minute to leave room for this.
+  The cost: one comparison sends 6 questions and one excerpt request per person for every source anyone cited, each
+  recorded in `excerpt_log`, and the browser console logs a 404 for every "No access" cell. Those 404s are the
+  server's answer, not a fault. With the scripted model each person cites one source, so that is at most 36 excerpt
+  requests, and the demo stack raises the per-person rate limit from 20 to 60 a minute to leave room for it. A real
+  model can cite up to five sources per person (`SPR_TOP_K`), which makes up to 30 columns and 30 excerpt requests
+  per person in one comparison: more than the code's default of 20 a minute allows, and half of the demo stack's 60,
+  so a second comparison within the minute runs into it. A cell the limit refused reads "Not checked: Too many
+  requests". The table has no cap on its columns.
+- A question in an address is shown, not sent, when that address is how the page was opened. One press of "Ask as
+  all six" is six questions, six model calls with a real model behind it, and six audit rows; a link someone was sent
+  must not be able to spend that by being opened. Inside the page, choosing a question sends it as before
+  (`CompareView.test.ts`, "does not send a question that arrived with the link"; the comparison journey checks that
+  no request leaves before the press). `/ask?q=` needs no such rule: nobody is signed in on a fresh page, so it
+  leads to the sign-in page first.
+- Signing out ends what is under way, not only what is on the page. Tokens are tied to a count of sign-outs: one
+  that was asked for before a sign-out and arrives after it is thrown away, and the request that wanted it is not
+  sent (`CompareView.test.ts`, "stops when the person signs out"). In-flight queries are cancelled and the cache is
+  cleared. A request that had already left with a token cannot be recalled; its answer is dropped.
+- Answers from the API and the login are sent `Cache-Control: no-store`, because the browser's HTTP cache outlives a
+  sign-out. Chromium then never finishes a request whose body nobody reads, so the client reads every refusal to
+  its end.
+- A view is a script of its own. If it cannot be loaded, as after a deploy that replaced the files, the router
+  reloads once to the address the person wanted, and if that does not help the shell says the page could not be
+  loaded (journey "a view whose script is gone"). The one thing kept in `sessionStorage` is a marker that the reload
+  happened, removed by the next page that loads; it holds no address and no question.
 - A reload signs the person out, because the token and the session are memory only. The page sends them to sign in
   and then back to the address they had. The journey "a person signs in, asks" asserts that `localStorage`,
   `sessionStorage` and `document.cookie` are empty afterwards.

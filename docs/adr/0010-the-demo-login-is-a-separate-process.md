@@ -18,9 +18,10 @@ that was never meant to have it.
 
 ## Consequences
 
-- No setting turns the API into a mint. `test_the_api_process_has_no_route_that_could_mint_a_token` reads the API's
-  OpenAPI document and requires exactly `/ask`, `/excerpts/{chunk_id}` and `/healthz`, and an import-linter contract
-  forbids `api`, `pipeline` and `store` from importing `demo_login`.
+- No setting turns the API into a mint. `test_the_api_process_has_no_route_that_could_mint_a_token` reads the
+  routes the app has registered, which is more than its OpenAPI document lists, and requires exactly `/ask`,
+  `/excerpts/{chunk_id}` and `/healthz`; the documentation routes a FastAPI app serves by default are switched off in
+  both apps. An import-linter contract forbids `api`, `pipeline` and `store` from importing `demo_login`.
 - The login gets the signing secret and nothing else. In `compose.yaml` it has no database address and no model key,
   and a second import contract keeps `asyncpg`, the store and the pipeline out of it.
 - Only the six names work. Any other well-formed name is a 404 and a request with extra fields is a 422, so a caller
@@ -29,7 +30,13 @@ that was never meant to have it.
   (`test_each_demo_person_gets_a_ten_minute_token_the_api_would_accept`).
 - There are no passwords. Anyone who can reach the login can be any of the six, restricted clearance included. That is
   the point of a demo and the reason this service must not be reachable by strangers; the sign-in page says so in one
-  sentence. Compose binds it to 127.0.0.1.
+  sentence. Compose binds it to 127.0.0.1, on port 8441 directly and on port 8440 behind the console's nginx.
+- Bound to 127.0.0.1 is not the same as unreachable from a web page. A page on another site can have its own name
+  re-pointed at 127.0.0.1 (DNS rebinding) and then post to the login from the visitor's browser. Such a request
+  still carries the other name in its Host header, so the login refuses any host name it was not started for with a
+  400 (`test_a_request_addressed_to_another_host_name_gets_no_token`; the names are 127.0.0.1 and localhost unless
+  `--allow-host` says otherwise), and nginx drops it without an answer. `tools/smoke.py` checks both against the
+  running stack.
 - One more process to run, and the secret now lives in two containers. Rotating it means restarting both.
 - Ten minutes is short enough that the console has to renew tokens. It does so once on a 401 without telling the
   person, and says so if that fails (ADR 11).

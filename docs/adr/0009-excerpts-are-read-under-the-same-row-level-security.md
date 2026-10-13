@@ -23,16 +23,27 @@ whether or not an answer ever showed it to them.
   body and headers of the two responses and requires them to be equal.
 - The endpoint grants nothing retrieval did not. `test_every_reader_can_open_exactly_the_chunks_the_access_rule_allows`
   opens all 149 chunks as all six people and compares each result with the Python oracle `identity.can_read`.
-- Excerpt text is redacted like an answer. A source can hold a worked example with a customer's IBAN; `/ask` already
-  removes it from answers, and opening the source must not show more than citing it did
-  (`test_personal_data_in_a_source_is_redacted_in_the_excerpt_as_it_is_in_an_answer`).
-- Every request is written to a new insert-only table, `excerpt_log`, with who asked, for which id, and whether
-  anything was found. The refused requests are recorded too, so probing for ids shows up. The application can insert
-  and nothing else (`test_the_application_cannot_read_change_delete_or_backdate_excerpt_records`). This is a second
-  audit table to keep and to query; the runbook entry for "someone saw a document they should not have" now needs both.
-- The id in the path is validated against the shape of a chunk id before anything runs. Without that, a caller could
-  put an IBAN in the path and have it written to the log and the record
-  (`test_an_id_that_is_not_shaped_like_a_chunk_id_is_rejected_and_reaches_no_log_or_record`).
+- Excerpt text is held to the rules of an answer, so that opening a source shows no more than citing it did. A
+  source can hold a worked example with a customer's IBAN; `/ask` removes it from answers, and it is removed here
+  (`test_personal_data_in_a_source_is_redacted_in_the_excerpt_as_it_is_in_an_answer`). A poisoned source can hold
+  a link to a foreign host; an answer repeating it is blocked, and here the link is replaced with a marker by the
+  same pattern and the same allow-list (`verify.withhold_links`,
+  `test_a_link_a_poisoned_source_plants_is_withheld_from_the_excerpt_as_it_is_from_an_answer`). The first version
+  of this endpoint did the first and not the second; a review found the phishing link in an excerpt.
+- Every request that reaches the database is written to a new insert-only table, `excerpt_log`, with who asked, for
+  which id, and the outcome: `found`, `not_found` or `error`. A request for a chunk the reader may not open is
+  recorded as `not_found`, so probing for ids shows up, and a read that fails is recorded as `error` before the 503
+  goes out (`test_a_read_that_fails_in_the_database_is_recorded_as_an_error_and_answered_503`). A request refused
+  before the database is reached writes no row: no valid token (401), an id that is not shaped like one (422), the
+  rate limit (429). The application can insert and nothing else
+  (`test_the_application_cannot_read_change_delete_or_backdate_excerpt_records`). This is a second audit table to
+  keep and to query; the runbook entry for "someone saw a document they should not have" now needs both.
+- The id in the path is validated against the shape of a chunk id before anything runs, with `[0-9]` and not `\d`,
+  which also matches the digits of other scripts. Without that, a caller could put an IBAN in the path and have it
+  written to the application's log line and the record
+  (`test_an_id_that_is_not_shaped_like_a_chunk_id_is_rejected_and_reaches_no_log_or_record`). This covers what the
+  application writes. A proxy in front of it still logs the path of every request as it was typed; the console's
+  nginx logs the path and nothing after the question mark.
 - Excerpt requests count against the same per-person rate limit as questions
   (`test_excerpt_requests_and_questions_share_one_rate_limit_per_subject`). Someone reading many sources can therefore
   use up their questions for that minute.

@@ -1,19 +1,22 @@
-"""``spr``: migrate, ingest, serve, mint a demo token, and run the two evaluations."""
+"""``spr``: migrate, ingest, serve, mint a demo token, run the demo login, write the OpenAPI documents, and run the
+two evaluations."""
 
 import argparse
 import asyncio
 import json
 import sys
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import anthropic
 import asyncpg
 
 from secure_policy_rag import corpus, embedding, evaluation, identity, store, telemetry
 from secure_policy_rag.api import RateLimiter, Services, create_app
+from secure_policy_rag.demo_login import LOCAL_HOSTS, build_demo_login
 from secure_policy_rag.model import AnswerModel, ClaudeModel, ScriptedModel
 from secure_policy_rag.pipeline import Assistant
 from secure_policy_rag.settings import Settings
@@ -82,7 +85,43 @@ def _serve(settings: Settings, host: str, port: int) -> None:
             await pool.close()
 
     app = create_app(services, secrets, RateLimiter(settings.rate_limit_per_minute))
-    uvicorn.run(app, host=host, port=port, log_config=None, server_header=False)
+    # No uvicorn access log: it prints the path and query string of every request as the caller typed them, and the
+    # log holds ids and outcomes only (docs/operations.md). The pipeline's own lines say who asked and how it ended.
+    uvicorn.run(app, host=host, port=port, log_config=None, server_header=False, access_log=False)
+
+
+def _demo_login(settings: Settings, host: str, port: int, ttl_minutes: int, allowed_hosts: Sequence[str]) -> None:
+    import uvicorn  # noqa: PLC0415
+
+    app = build_demo_login(
+        settings.token_secrets()[0], timedelta(minutes=ttl_minutes), allowed_hosts=allowed_hosts or LOCAL_HOSTS
+    )
+    uvicorn.run(app, host=host, port=port, log_config=None, server_header=False, access_log=False)
+
+
+def _never_started() -> AbstractAsyncContextManager[Services]:
+    raise RuntimeError("this app only describes itself; it is never started")
+
+
+def openapi_documents() -> dict[str, dict[str, Any]]:
+    """The two contracts the browser client is generated from, by file name. Building them opens no database and
+    needs no secret, because neither app is started."""
+    return {
+        "api.openapi.json": create_app(_never_started, [], RateLimiter(per_minute=1)).openapi(),
+        "login.openapi.json": build_demo_login(b"", timedelta(0)).openapi(),
+    }
+
+
+def render_openapi(document: dict[str, Any]) -> str:
+    """Sorted keys and a fixed indent, so the committed file changes only when the contract does."""
+    return json.dumps(document, indent=2, sort_keys=True) + "\n"
+
+
+def _openapi(directory: Path) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, document in openapi_documents().items():
+        (directory / name).write_text(render_openapi(document), encoding="utf-8", newline="\n")
+        _out(f"wrote {directory / name}")
 
 
 def _token(settings: Settings, subject: str, ttl_minutes: int) -> None:
@@ -155,6 +194,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     token = commands.add_parser("token", help="mint a bearer token for a demo identity")
     token.add_argument("subject", help=", ".join(identity.DEMO_IDENTITIES))
     token.add_argument("--ttl-minutes", type=int, default=60)
+    login = commands.add_parser("demo-login", help="run the demo's login: tokens for the six demo identities only")
+    login.add_argument("--host", default="127.0.0.1", help="127.0.0.1 unless you mean to expose it")
+    login.add_argument("--port", type=int, default=8000)
+    login.add_argument("--ttl-minutes", type=int, default=10)
+    login.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=f"a host name requests may be addressed to; repeat for several (default: {', '.join(LOCAL_HOSTS)})",
+    )
+    openapi = commands.add_parser("openapi", help="write the OpenAPI documents the browser client is generated from")
+    openapi.add_argument("--output", type=Path, default=Path("web/src/shared/api"))
     retrieval = commands.add_parser("eval-retrieval", help="score retrieval and fail on a regression or any leak")
     retrieval.add_argument("--cases", type=Path, default=Path("eval/retrieval.jsonl"))
     retrieval.add_argument("--corpus", type=Path, default=Path("corpus"))
@@ -169,6 +221,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     answers.add_argument("--judge", action="store_true", help="also grade faithfulness with a model (needs a key)")
     answers.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
+    if args.command == "openapi":  # before any configuration is read: the documents depend on the code alone
+        _openapi(args.output)
+        return 0
 
     settings = Settings()
     telemetry.configure(settings.log_level, settings.trace_exporter if args.command == "serve" else "none")
@@ -181,6 +236,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             _serve(settings, args.host, args.port)
         case "token":
             _token(settings, args.subject, args.ttl_minutes)
+        case "demo-login":
+            _demo_login(settings, args.host, args.port, args.ttl_minutes, args.allow_host)
         case "eval-retrieval":
             return asyncio.run(_eval_retrieval(settings, args))
         case "eval-answers":

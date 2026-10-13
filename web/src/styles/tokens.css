@@ -1,0 +1,47 @@
+/* A records office, not a dashboard: white paper, ruled lines, one green for what can be acted on, and reference
+   numbers in a fixed-width face. Every text colour below holds 4.5:1 or better on --paper and on --band. */
+:root {
+  color-scheme: light;
+
+  --paper: #ffffff;
+  --band: #f1f4f2;
+  --ink: #16211d;
+  --ink-soft: #47554f;
+  --rule: #c5cec9;
+  --green: #0a5a4a;
+  --green-wash: #e2efea;
+  --red: #9a2a1f;
+  --red-wash: #f8e9e6;
+
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --font-ref: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Consolas, 'SF Mono', Menlo, monospace;
+
+  --page: 76rem;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 1rem / 1.5 var(--font-ui);
+}
+
+:focus-visible {
+  outline: 3px solid var(--green);
+  outline-offset: 2px;
+}
+
+/* A heading takes focus after a route change so a screen reader starts on the new page; it is not a control. */
+h1:focus,
+h2:focus {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

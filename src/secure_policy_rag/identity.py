@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 type Department = Literal["credit", "compliance", "data", "security", "hr", "markets"]
 DEPARTMENTS: frozenset[str] = frozenset(get_args(Department.__value__))
+type ClearanceLabel = Literal["public", "internal", "confidential", "restricted"]
 
 
 class Clearance(IntEnum):
@@ -51,7 +52,7 @@ class _Claims(BaseModel):
 
     sub: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9._-]+$")
     departments: list[Department] = Field(max_length=len(DEPARTMENTS))
-    clearance: Literal["public", "internal", "confidential", "restricted"]
+    clearance: ClearanceLabel
     exp: int
 
 

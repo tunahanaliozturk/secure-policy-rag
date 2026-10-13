@@ -17,6 +17,27 @@ uv run pytest tests/integration        # needs Docker
 uv run python tools/license_audit.py
 ```
 
+If you touch `web/`, run its gates too (Node 24):
+
+```bash
+cd web
+npm ci
+npm run type-check && npm run lint && npm run format:check
+npm run test:unit                      # with coverage thresholds
+npm run build && npm run size
+npm run licences && npm audit --audit-level=high
+npx playwright test                    # needs the compose stack up; see the README
+npm run lighthouse                     # same
+```
+
+If you change a request or response model in `api.py` or `demo_login.py`, regenerate the contract and commit the
+result. CI does the same and fails on any difference:
+
+```bash
+uv run spr openapi
+cd web && npm run gen:api && npm run type-check
+```
+
 If you touch retrieval, chunking or the corpus, also run the retrieval evaluation against the compose database
 (`uv run spr eval-retrieval`) and say in the pull request how the numbers moved. Only regenerate
 `eval/baseline.json` when a change is meant to move them, and explain why in the same commit.
@@ -26,15 +47,31 @@ If you touch retrieval, chunking or the corpus, also run the retrieval evaluatio
 - **Access decisions belong in `schema.sql`.** Do not add filtering by clearance or department in Python; the point is
   that Python cannot get it wrong. A new table that holds document text needs row-level security, forced, and a test
   in `test_access_control.py`.
-- **No text in logs or spans.** Log ids, counts and outcomes. The sentinel test in `test_audit.py` will catch most
-  slips; please do not weaken it.
-- **Every exit from `Assistant.ask` writes one audit record** before returning.
+- **No text in logs or spans.** Log ids, counts and outcomes. The sentinel tests in `test_audit.py` will catch most
+  slips; please do not weaken them. An address is text too: the question is in the console's address, so nothing
+  may log a query string or a Referer. `tools/smoke.py` sends a marked question and reads every log of the stack.
+- **Every exit from `Assistant.ask` writes one audit record** before returning, and every excerpt request that reaches
+  the database writes one `excerpt_log` row with its outcome: `found`, `not_found` or `error`. A request refused
+  earlier (401, 422, 429) writes none.
+- **What an excerpt shows is held to the rules of an answer**: redacted, and with links to hosts off the allow-list
+  withheld (`verify.withhold_links`). A source must not show more when opened than when cited.
+- **One way to read `chunks`.** Anything that reads a chunk for a caller goes through `store.reading_as`. A second
+  query path is a second place for the access rule to be forgotten.
+- **The API never issues a token.** Minting lives in `demo_login.py` and the `spr token` command; an import contract
+  and a test on the API's routes hold the line.
+- **Opening an address spends nothing.** A question that arrives with a link is shown and not sent; a press sends
+  it. One comparison is six questions.
+- **Only `setup` holds the administrator's credentials.** `tools/smoke.py` reads the resolved compose file and fails
+  if `api`, `login` or `web` is given `SPR_ADMIN_DATABASE_URL` or `SPR_APP_DB_PASSWORD`.
+- **The page computes no access and trusts no response.** A view shows what the server said to that person, and every
+  response is parsed by a Zod schema tied to the generated type. No `as` at a network boundary, no `v-html`, no token
+  in storage, no inline style (the content security policy would drop it).
 - **Dependencies must be permissively licensed at every depth.** The licence audit fails the build otherwise. Add a
   dependency only when a few lines of code will not do.
 - **Tests name the promise**, for example `a_revoked_token_is_refused`, not `test_token_3`. A test that cannot fail is
   not a test.
 - **Docs: English, short sentences, no em dashes**, and every claim points at a test or a measurement. `test_docs.py`
-  checks the configuration table and the dashes.
+  checks the configuration table and the dashes, in `web/` as well.
 
 ## Commits
 

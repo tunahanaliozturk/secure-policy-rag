@@ -1,19 +1,8 @@
-# Local stack: Postgres with pgvector, a one-shot setup (schema, policies, grants, corpus), and the API.
+# Local stack: Postgres with pgvector, a one-shot setup (schema, policies, grants, corpus), the API, the demo login,
+# and the browser console in front of both on one origin (http://127.0.0.1:8440).
 # The database passwords below are defaults for a laptop stack and nothing else; override them with the environment
 # variables named here. SPR_TOKEN_SECRET has no default: the API refuses to start without one (see README).
 name: secure-policy-rag
-
-x-app: &app
-  image: secure-policy-rag:local
-  environment:
-    SPR_ADMIN_DATABASE_URL: postgresql://postgres:${SPR_ADMIN_DB_PASSWORD:-local-dev-admin}@postgres:5432/policies
-    SPR_APP_DB_PASSWORD: ${SPR_APP_DB_PASSWORD:-local-dev-app}
-    SPR_DATABASE_URL: postgresql://spr_app:${SPR_APP_DB_PASSWORD:-local-dev-app}@postgres:5432/policies
-    SPR_TOKEN_SECRET: ${SPR_TOKEN_SECRET:-}
-    # "scripted" answers offline with a deterministic stand-in; set "anthropic" and ANTHROPIC_API_KEY for Claude.
-    SPR_MODEL_PROVIDER: ${SPR_MODEL_PROVIDER:-scripted}
-    SPR_MODEL: ${SPR_MODEL:-claude-sonnet-5-5}
-    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 
 services:
   postgres:
@@ -29,15 +18,33 @@ services:
       interval: 2s
       retries: 30
 
+  # The only service that connects as the administrator: it creates the schema, the policies and the grants, sets the
+  # application role's password, and loads the corpus. Then it exits. tools/smoke.py fails if any other service is
+  # given the administrator's address or that password.
   setup:
-    <<: *app
+    image: secure-policy-rag:local
     build: .
     entrypoint: ["sh", "-c", "spr migrate && spr ingest /app/corpus"]
+    environment:
+      SPR_ADMIN_DATABASE_URL: postgresql://postgres:${SPR_ADMIN_DB_PASSWORD:-local-dev-admin}@postgres:5432/policies
+      SPR_APP_DB_PASSWORD: ${SPR_APP_DB_PASSWORD:-local-dev-app}
     depends_on:
       postgres: {condition: service_healthy}
 
+  # Connects as spr_app, the role row-level security applies to, and holds nothing that could get around it.
   api:
-    <<: *app
+    image: secure-policy-rag:local
+    environment:
+      SPR_DATABASE_URL: postgresql://spr_app:${SPR_APP_DB_PASSWORD:-local-dev-app}@postgres:5432/policies
+      SPR_TOKEN_SECRET: ${SPR_TOKEN_SECRET:-}
+      # "scripted" answers offline with a deterministic stand-in; set "anthropic" and ANTHROPIC_API_KEY for Claude.
+      SPR_MODEL_PROVIDER: ${SPR_MODEL_PROVIDER:-scripted}
+      SPR_MODEL: ${SPR_MODEL:-claude-sonnet-5-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Per person, per minute. The code's default is 20. With the scripted model each person cites one source, so
+      # "Ask as everyone" sends one question and at most six excerpt requests as each person, and 60 leaves room for
+      # a few comparisons in a row. A real model can cite up to five sources each (SPR_TOP_K): see docs/operations.md.
+      SPR_RATE_LIMIT_PER_MINUTE: ${SPR_RATE_LIMIT_PER_MINUTE:-60}
     ports: ["127.0.0.1:8400:8000"]
     depends_on:
       setup: {condition: service_completed_successfully}
@@ -46,6 +53,36 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
       interval: 3s
       retries: 30
+
+  # Stands in for the bank's identity provider: a ten-minute token for one of the six demo people, no passwords.
+  # A process of its own because the API only ever verifies tokens (ADR 0010). It gets the signing secret and nothing
+  # else: no database address, no model key.
+  login:
+    image: secure-policy-rag:local
+    command: ["demo-login", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      SPR_TOKEN_SECRET: ${SPR_TOKEN_SECRET:-}
+    ports: ["127.0.0.1:8441:8000"]
+    depends_on:
+      # Only so that the image exists: setup is the service that builds it.
+      setup: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 3s
+      retries: 30
+
+  # The browser console, and the one origin the browser talks to: /api/ and /login/ are proxied (web/nginx.conf).
+  web:
+    build: ./web
+    image: secure-policy-rag-web:local
+    ports: ["127.0.0.1:8440:8080"]
+    depends_on:
+      api: {condition: service_healthy}
+      login: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 3s
+      retries: 20
 
 volumes:
   postgres:

@@ -1,6 +1,6 @@
 [project]
 name = "secure-policy-rag"
-version = "0.1.0"
+version = "0.2.0"
 description = "A policy assistant for bank staff where access control, PII redaction and citation checks hold even when the model or the app code misbehaves"
 readme = "README.md"
 license = "MIT"
@@ -109,3 +109,22 @@ source_modules = [
     "secure_policy_rag.identity",
 ]
 forbidden_modules = ["asyncpg", "fastapi", "anthropic", "fastembed", "secure_policy_rag.store", "secure_policy_rag.api"]
+
+[[tool.importlinter.contracts]]
+name = "The API and everything under it never reach the demo login, the only code that hands out tokens"
+type = "forbidden"
+source_modules = ["secure_policy_rag.api", "secure_policy_rag.pipeline", "secure_policy_rag.store"]
+forbidden_modules = ["secure_policy_rag.demo_login"]
+
+[[tool.importlinter.contracts]]
+name = "The demo login knows who the six people are and nothing about questions, the model or the database"
+type = "forbidden"
+source_modules = ["secure_policy_rag.demo_login"]
+forbidden_modules = [
+    "asyncpg",
+    "anthropic",
+    "fastembed",
+    "secure_policy_rag.api",
+    "secure_policy_rag.pipeline",
+    "secure_policy_rag.store",
+]

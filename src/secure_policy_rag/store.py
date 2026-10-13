@@ -1,14 +1,17 @@
-"""Everything that talks to Postgres: schema, loading the corpus, retrieval under row-level security, the audit log.
+"""Everything that talks to Postgres: schema, loading the corpus, reading chunks under row-level security, the audit
+log and the record of opened excerpts.
 
-Retrieval sets the reader's clearance and departments with ``set_config(..., true)``, which lasts until the end of the
-transaction, then runs both retrievers inside that transaction. The filtering itself happens in the database policy
-(schema.sql). Nothing in this module decides what a user may see; it only says who is asking. A bug that drops a
-WHERE clause here still returns only rows the policy allows (tests/integration/test_access_control.py).
+Every read of ``chunks`` sets the reader's clearance and departments with ``set_config(..., true)``, which lasts until
+the end of the transaction, then queries inside that transaction (:func:`reading_as`). The filtering itself happens in
+the database policy (schema.sql). Nothing in this module decides what a user may see; it only says who is asking. A
+bug that drops a WHERE clause here still returns only rows the policy allows
+(tests/integration/test_access_control.py).
 """
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -84,8 +87,7 @@ async def retrieve(
     """The best ``k`` chunks this reader may see, by reciprocal rank fusion of full-text and vector rankings.
     ``retrievers`` exists so the evaluation can measure each one alone."""
     rankings: dict[str, list[str]] = {}
-    async with pool.acquire() as conn, conn.transaction(readonly=True):
-        await set_reader(conn, reader)
+    async with reading_as(pool, reader) as conn:
         if "lexical" in retrievers and _HAS_WORD.search(query):
             rankings["lexical"] = [r["id"] for r in await conn.fetch(_LEXICAL, query, candidates)]
         if "vector" in retrievers:
@@ -107,6 +109,40 @@ async def retrieve(
         )
         for chunk_id in winners
     ]
+
+
+@dataclass(frozen=True)
+class Passage:
+    """One chunk as a reader opens it. Unlike an :class:`Excerpt` it says which department owns the text."""
+
+    chunk_id: str
+    title: str
+    heading: str
+    text: str
+    department: str
+    classification: str
+
+
+async def read(pool: asyncpg.Pool, reader: Identity, chunk_id: str) -> Passage | None:
+    """The chunk with this id, if the policy shows it to this reader. ``None`` covers both "no such chunk" and "not
+    for this reader": the query returns no row either way, so nothing above this function can tell them apart or
+    reveal which it was (ADR 0009)."""
+    async with reading_as(pool, reader) as conn:
+        row = await conn.fetchrow(
+            "select id, title, heading, text, department, classification from chunks where id = $1", chunk_id
+        )
+    if row is None:
+        return None
+    return Passage(row["id"], row["title"], row["heading"], row["text"], row["department"], row["classification"])
+
+
+@asynccontextmanager
+async def reading_as(pool: asyncpg.Pool, reader: Identity) -> AsyncIterator[asyncpg.Connection]:
+    """A connection that reads chunks as ``reader`` and as nobody else: a read-only transaction with the reader set.
+    Retrieval and single-chunk reads both go through here, so there is one way to say who is asking."""
+    async with pool.acquire() as conn, conn.transaction(readonly=True):
+        await set_reader(conn, reader)
+        yield conn
 
 
 async def set_reader(conn: asyncpg.Connection, reader: Identity) -> None:
@@ -157,4 +193,22 @@ async def record(pool: asyncpg.Pool, entry: AuditEntry) -> None:
         entry.latency_ms,
         entry.input_tokens,
         entry.output_tokens,
+    )
+
+
+type ReadOutcome = Literal["found", "not_found", "error"]
+
+
+async def record_read(pool: asyncpg.Pool, reader: Identity, chunk_id: str, outcome: ReadOutcome) -> None:
+    """One row per excerpt request that reached the database: who asked for which chunk, and whether the policy
+    showed it to them, showed them nothing, or the read failed. A request stopped earlier (no valid token, an id that
+    is not shaped like one, the rate limit) never gets here and leaves no row. Insert-only for the application, like
+    the audit log."""
+    await pool.execute(
+        "insert into excerpt_log (subject, departments, clearance, chunk_id, outcome) values ($1, $2, $3, $4, $5)",
+        reader.subject,
+        sorted(reader.departments),
+        reader.clearance.label,
+        chunk_id,
+        outcome,
     )

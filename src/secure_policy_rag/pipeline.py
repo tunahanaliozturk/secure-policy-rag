@@ -1,4 +1,4 @@
-"""One question, start to finish: redact, retrieve, generate, verify, redact again, audit.
+"""One question, start to finish: redact, retrieve, generate, verify, redact again, audit. And one excerpt, opened.
 
 A plain sequence of awaited steps rather than an agent graph (ADR 0006). The flow has no loops and no model-chosen
 branches: the model is called at most once and holds no tools. Every exit path writes exactly one audit record, and
@@ -8,7 +8,7 @@ an answer is only returned after its audit record is committed, so there is no a
 import asyncio
 import time
 from collections.abc import Callable, Collection
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 import asyncpg
@@ -119,6 +119,30 @@ class Assistant:
             if not verdict.ok:
                 return await self._finish(audit.done("blocked", BLOCKED), started)
             return await self._finish(audit.done("answered", draft.answer), started)
+
+    async def excerpt(self, reader: Identity, chunk_id: str) -> store.Passage | None:
+        """One chunk as this reader may read it, or ``None``. Read through the same row-level security as retrieval,
+        held to the rules an answer is held to, and recorded before it is returned: found, not found, or a read that
+        failed. An excerpt must not show more than an answer citing it could."""
+        with tracer.start_as_current_span("excerpt") as span:
+            span.set_attribute("spr.clearance", reader.clearance.label)
+            try:
+                passage = await store.read(self._pool, reader, chunk_id)
+            except Exception:
+                await self._read(span, reader, chunk_id, "error")
+                raise
+            await self._read(span, reader, chunk_id, "not_found" if passage is None else "found")
+            if passage is None:
+                return None
+            # A source can hold a worked example with a customer's IBAN, and a poisoned source a link to a foreign
+            # host. An answer is redacted for the first and blocked for the second (verify.py); so is this.
+            text = verify.withhold_links(pii.redact(passage.text).text, self._allowed_link_hosts)
+            return replace(passage, text=text)
+
+    async def _read(self, span: trace.Span, reader: Identity, chunk_id: str, outcome: store.ReadOutcome) -> None:
+        span.set_attribute("spr.outcome", outcome)
+        await store.record_read(self._pool, reader, chunk_id, outcome)
+        log.info("excerpt", subject=reader.subject, chunk_id=chunk_id, outcome=outcome)
 
     async def _finish(self, audit: _Audit, started: float) -> Answer:
         # Sources can hold personal data (a worked example with a customer's IBAN), and the model may repeat it.

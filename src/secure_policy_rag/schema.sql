@@ -1,6 +1,6 @@
 -- Applied by `spr migrate` as the administrator. Idempotent: it can run on every deploy.
 -- The application connects as spr_app, which owns nothing, cannot bypass row-level security, and holds two grants:
--- SELECT on chunks (filtered by the policy below) and INSERT on some columns of audit_log. See ADR 0002.
+-- SELECT on chunks (filtered by the policy below) and INSERT on some columns of audit_log and excerpt_log. See ADR 0002.
 
 create extension if not exists vector;
 
@@ -74,11 +74,41 @@ create table if not exists audit_log (
 
 create index if not exists audit_log_subject_at on audit_log (subject, at);
 
+-- Append-only record of every request to open one chunk (GET /excerpts/{id}) that reached the database. outcome is
+-- 'not_found' when the policy above returned no row, whether the chunk is hidden from this reader or does not exist,
+-- and 'error' when the read itself failed. A request refused before that (401 no valid token, 422 an id that is not
+-- shaped like one, 429 the rate limit) writes no row.
+create table if not exists excerpt_log (
+    id          uuid        primary key default uuidv7(),
+    at          timestamptz not null default now(),
+    subject     text        not null,
+    departments text[]      not null,
+    clearance   text        not null,
+    chunk_id    text        not null,
+    outcome     text        not null check (outcome in ('found', 'not_found', 'error'))
+);
+
+-- Builds of 0.2.0 before its release recorded a boolean, found, and no failed reads. Carry such a table over.
+do $$
+begin
+    if exists (select from information_schema.columns
+               where table_schema = current_schema() and table_name = 'excerpt_log' and column_name = 'found') then
+        alter table excerpt_log add column outcome text check (outcome in ('found', 'not_found', 'error'));
+        update excerpt_log set outcome = case when excerpt_log.found then 'found' else 'not_found' end;
+        alter table excerpt_log alter column outcome set not null;
+        alter table excerpt_log drop column found;
+    end if;
+end
+$$;
+
+create index if not exists excerpt_log_chunk_at on excerpt_log (chunk_id, at);
+
 -- Least privilege, stated in full. Revoke first so a rerun after a grant change leaves exactly what is listed here.
-revoke all on chunks, audit_log from public, spr_app;
+revoke all on chunks, audit_log, excerpt_log from public, spr_app;
 grant usage on schema public to spr_app;
 grant select on chunks to spr_app;
 -- Column list: the database stamps id and at, so the application cannot backdate a record.
 grant insert (subject, departments, clearance, question_redacted, outcome, retrieved_chunk_ids, cited_chunk_ids,
               redactions_in, redactions_out, violations, model, latency_ms, input_tokens, output_tokens)
     on audit_log to spr_app;
+grant insert (subject, departments, clearance, chunk_id, outcome) on excerpt_log to spr_app;

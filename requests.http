@@ -53,4 +53,32 @@ Content-Type: application/json
 
 {"question": "Which issuers are on the restricted list?", "clearance": "restricted"}
 
-### Repeat a request quickly: after 20 in a minute the same user gets 429 with Retry-After.
+### Repeat a request quickly: after 60 in a minute (the compose setting; the code's default is 20) the same user gets
+### 429 with Retry-After.
+
+### Erin opens the restricted source her answer cited. The # in a chunk id is written %23 in a path.
+GET {{base}}/excerpts/SEC-004%232
+Authorization: Bearer {{erin}}
+
+### Dave asks for the same chunk: 404, the same answer as for a chunk that does not exist (next request).
+GET {{base}}/excerpts/SEC-004%232
+Authorization: Bearer {{dave}}
+
+### A chunk that is in no document: the same 404, byte for byte.
+GET {{base}}/excerpts/SEC-999%232
+Authorization: Bearer {{dave}}
+
+### The demo login, a separate process on port 8441: the six people it will issue a token for.
+GET http://127.0.0.1:8441/identities
+
+### A ten-minute token for one of them. There is no password; this is a demo.
+POST http://127.0.0.1:8441/token
+Content-Type: application/json
+
+{"name": "erin"}
+
+### Anyone else: 404. Sending your own clearance: 422.
+POST http://127.0.0.1:8441/token
+Content-Type: application/json
+
+{"name": "mallory"}

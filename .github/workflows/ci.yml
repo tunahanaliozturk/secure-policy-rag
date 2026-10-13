@@ -97,26 +97,136 @@ jobs:
           name: eval-reports
           path: eval/report-*.json
 
+  contract:
+    name: the browser client's contract is what the servers serve (regenerate, fail on any diff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: uv sync --locked
+      - name: Write both OpenAPI documents from the code
+        run: uv run spr openapi
+      - run: npm ci
+        working-directory: web
+      - name: Generate the TypeScript types from them
+        run: npm run gen:api
+        working-directory: web
+      - name: A diff means the contract moved and the committed client did not follow
+        run: git diff --exit-code -- web/src/shared/api
+
+  web-static:
+    name: web types, lint, format, licences, audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run licences
+      - run: npm audit --audit-level=high
+
+  web-unit:
+    name: web unit and component tests, with coverage thresholds
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run test:unit
+
+  web-budgets:
+    name: web build and bundle budget
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run size
+
   vulnerabilities:
-    name: known vulnerabilities (pip-audit)
+    name: known vulnerabilities in dependencies and both images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.2.0
       - run: uv export --locked --no-dev --no-emit-project --format requirements-txt -o requirements.txt
       - run: uvx pip-audit --requirement requirements.txt --disable-pip --no-deps --strict
+      - run: docker build --tag secure-policy-rag:scan .
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: secure-policy-rag:scan
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - run: docker build --tag secure-policy-rag-web:scan web
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: secure-policy-rag-web:scan
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
 
   quickstart:
-    name: README quick start against the compose stack
+    name: README quick start, then the browser journeys and Lighthouse, against the compose stack
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Start the stack exactly as the README does
         run: |
           export SPR_TOKEN_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
           echo "SPR_TOKEN_SECRET=$SPR_TOKEN_SECRET" >> "$GITHUB_ENV"
           docker compose up --build --detach --wait --wait-timeout 600
       - run: uv run --no-project python tools/smoke.py
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium firefox
+        working-directory: web
+      - name: Journeys in Chromium and Firefox, with axe on every view
+        run: npx playwright test
+        working-directory: web
+      - name: Lighthouse on the page nginx serves, with the six people loaded from the demo login
+        run: npm run lighthouse
+        working-directory: web
       - if: failure()
         run: docker compose logs
+      - if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: playwright-report
+          path: web/playwright-report
+          retention-days: 7

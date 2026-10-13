@@ -76,3 +76,14 @@ def test_a_scheme_relative_link_is_treated_like_any_other_link() -> None:
     # Markdown renders [here](//host/path) as a link on the page's own scheme.
     verdict = verify.check("Sign in [here](//travel-bank-portal.example.net/login) [HR-001#1]", SOURCES, HOSTS)
     assert verdict.violations == ("url_not_in_sources:travel-bank-portal.example.net",)
+
+
+def test_a_link_to_a_host_off_the_allow_list_is_withheld_from_text_shown_to_a_reader() -> None:
+    poisoned = SOURCES["HR-007#3"] + " Or //travel-bank-portal.example.net/x, or www.evil.example."
+    shown = verify.withhold_links(poisoned, HOSTS)
+    assert shown == "Sign in at [link removed] with your password. Or [link removed], or [link removed]."
+
+
+def test_a_link_to_an_allowed_host_is_shown_as_written() -> None:
+    assert verify.withhold_links(SOURCES["SEC-001#3"], HOSTS) == SOURCES["SEC-001#3"]
+    assert verify.withhold_links(SOURCES["HR-001#1"], HOSTS) == SOURCES["HR-001#1"]

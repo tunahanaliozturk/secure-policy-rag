@@ -196,14 +196,19 @@ async def record(pool: asyncpg.Pool, entry: AuditEntry) -> None:
     )
 
 
-async def record_read(pool: asyncpg.Pool, reader: Identity, chunk_id: str, *, found: bool) -> None:
-    """One row per excerpt request, the refused ones included: who asked for which chunk, and whether the policy
-    showed it to them. Insert-only for the application, like the audit log."""
+type ReadOutcome = Literal["found", "not_found", "error"]
+
+
+async def record_read(pool: asyncpg.Pool, reader: Identity, chunk_id: str, outcome: ReadOutcome) -> None:
+    """One row per excerpt request that reached the database: who asked for which chunk, and whether the policy
+    showed it to them, showed them nothing, or the read failed. A request stopped earlier (no valid token, an id that
+    is not shaped like one, the rate limit) never gets here and leaves no row. Insert-only for the application, like
+    the audit log."""
     await pool.execute(
-        "insert into excerpt_log (subject, departments, clearance, chunk_id, found) values ($1, $2, $3, $4, $5)",
+        "insert into excerpt_log (subject, departments, clearance, chunk_id, outcome) values ($1, $2, $3, $4, $5)",
         reader.subject,
         sorted(reader.departments),
         reader.clearance.label,
         chunk_id,
-        found,
+        outcome,
     )

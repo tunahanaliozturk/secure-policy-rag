@@ -36,6 +36,21 @@ def urls(text: str) -> list[str]:
     return [u.rstrip(".,;:") for u in _URL.findall(text)]
 
 
+LINK_REMOVED = "[link removed]"
+
+
+def withhold_links(text: str, allowed_hosts: Collection[str]) -> str:
+    """``text`` with every link to a host outside the allow-list replaced by a marker. For source text shown to a
+    reader as it is, where there is no answer to block: the same pattern finds the links and the same allow-list
+    judges them as in :func:`check`, so an excerpt cannot show a link that an answer citing it would be blocked for."""
+
+    def judged(match: re.Match[str]) -> str:
+        url = match.group().rstrip(".,;:")
+        return (url if host(url) in allowed_hosts else LINK_REMOVED) + match.group()[len(url) :]
+
+    return _URL.sub(judged, text)
+
+
 def citations(text: str) -> tuple[str, ...]:
     return tuple(_unique(i for group in _CITATION.findall(text) for i in re.findall(_ID, group)))
 

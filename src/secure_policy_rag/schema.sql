@@ -74,8 +74,10 @@ create table if not exists audit_log (
 
 create index if not exists audit_log_subject_at on audit_log (subject, at);
 
--- Append-only record of every request to open one chunk (GET /excerpts/{id}), the refused ones included. found is
--- false when the policy above returned no row, whether the chunk is hidden from this reader or does not exist.
+-- Append-only record of every request to open one chunk (GET /excerpts/{id}) that reached the database. outcome is
+-- 'not_found' when the policy above returned no row, whether the chunk is hidden from this reader or does not exist,
+-- and 'error' when the read itself failed. A request refused before that (401 no valid token, 422 an id that is not
+-- shaped like one, 429 the rate limit) writes no row.
 create table if not exists excerpt_log (
     id          uuid        primary key default uuidv7(),
     at          timestamptz not null default now(),
@@ -83,8 +85,21 @@ create table if not exists excerpt_log (
     departments text[]      not null,
     clearance   text        not null,
     chunk_id    text        not null,
-    found       boolean     not null
+    outcome     text        not null check (outcome in ('found', 'not_found', 'error'))
 );
+
+-- Builds of 0.2.0 before its release recorded a boolean, found, and no failed reads. Carry such a table over.
+do $$
+begin
+    if exists (select from information_schema.columns
+               where table_schema = current_schema() and table_name = 'excerpt_log' and column_name = 'found') then
+        alter table excerpt_log add column outcome text check (outcome in ('found', 'not_found', 'error'));
+        update excerpt_log set outcome = case when excerpt_log.found then 'found' else 'not_found' end;
+        alter table excerpt_log alter column outcome set not null;
+        alter table excerpt_log drop column found;
+    end if;
+end
+$$;
 
 create index if not exists excerpt_log_chunk_at on excerpt_log (chunk_id, at);
 
@@ -96,4 +111,4 @@ grant select on chunks to spr_app;
 grant insert (subject, departments, clearance, question_redacted, outcome, retrieved_chunk_ids, cited_chunk_ids,
               redactions_in, redactions_out, violations, model, latency_ms, input_tokens, output_tokens)
     on audit_log to spr_app;
-grant insert (subject, departments, clearance, chunk_id, found) on excerpt_log to spr_app;
+grant insert (subject, departments, clearance, chunk_id, outcome) on excerpt_log to spr_app;

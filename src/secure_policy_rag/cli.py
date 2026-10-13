@@ -16,7 +16,7 @@ import asyncpg
 
 from secure_policy_rag import corpus, embedding, evaluation, identity, store, telemetry
 from secure_policy_rag.api import RateLimiter, Services, create_app
-from secure_policy_rag.demo_login import build_demo_login
+from secure_policy_rag.demo_login import LOCAL_HOSTS, build_demo_login
 from secure_policy_rag.model import AnswerModel, ClaudeModel, ScriptedModel
 from secure_policy_rag.pipeline import Assistant
 from secure_policy_rag.settings import Settings
@@ -85,14 +85,18 @@ def _serve(settings: Settings, host: str, port: int) -> None:
             await pool.close()
 
     app = create_app(services, secrets, RateLimiter(settings.rate_limit_per_minute))
-    uvicorn.run(app, host=host, port=port, log_config=None, server_header=False)
+    # No uvicorn access log: it prints the path and query string of every request as the caller typed them, and the
+    # log holds ids and outcomes only (docs/operations.md). The pipeline's own lines say who asked and how it ended.
+    uvicorn.run(app, host=host, port=port, log_config=None, server_header=False, access_log=False)
 
 
-def _demo_login(settings: Settings, host: str, port: int, ttl_minutes: int) -> None:
+def _demo_login(settings: Settings, host: str, port: int, ttl_minutes: int, allowed_hosts: Sequence[str]) -> None:
     import uvicorn  # noqa: PLC0415
 
-    app = build_demo_login(settings.token_secrets()[0], timedelta(minutes=ttl_minutes))
-    uvicorn.run(app, host=host, port=port, log_config=None, server_header=False)
+    app = build_demo_login(
+        settings.token_secrets()[0], timedelta(minutes=ttl_minutes), allowed_hosts=allowed_hosts or LOCAL_HOSTS
+    )
+    uvicorn.run(app, host=host, port=port, log_config=None, server_header=False, access_log=False)
 
 
 def _never_started() -> AbstractAsyncContextManager[Services]:
@@ -194,6 +198,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     login.add_argument("--host", default="127.0.0.1", help="127.0.0.1 unless you mean to expose it")
     login.add_argument("--port", type=int, default=8000)
     login.add_argument("--ttl-minutes", type=int, default=10)
+    login.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=f"a host name requests may be addressed to; repeat for several (default: {', '.join(LOCAL_HOSTS)})",
+    )
     openapi = commands.add_parser("openapi", help="write the OpenAPI documents the browser client is generated from")
     openapi.add_argument("--output", type=Path, default=Path("web/src/shared/api"))
     retrieval = commands.add_parser("eval-retrieval", help="score retrieval and fail on a regression or any leak")
@@ -226,7 +237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         case "token":
             _token(settings, args.subject, args.ttl_minutes)
         case "demo-login":
-            _demo_login(settings, args.host, args.port, args.ttl_minutes)
+            _demo_login(settings, args.host, args.port, args.ttl_minutes, args.allow_host)
         case "eval-retrieval":
             return asyncio.run(_eval_retrieval(settings, args))
         case "eval-answers":

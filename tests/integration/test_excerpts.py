@@ -38,7 +38,7 @@ def path(chunk_id: str) -> str:
     return f"/excerpts/{chunk_id.replace('#', '%23')}"
 
 
-def client_for(app_pool: asyncpg.Pool, per_minute: int) -> httpx.AsyncClient:
+def client_for(app_pool: asyncpg.Pool, per_minute: int, *, raise_app_exceptions: bool = True) -> httpx.AsyncClient:
     services = Services(Assistant(app_pool, HashingEmbedder(), ScriptedModel(), {"intranet.bank.example"}), app_pool)
 
     @asynccontextmanager
@@ -47,7 +47,8 @@ def client_for(app_pool: asyncpg.Pool, per_minute: int) -> httpx.AsyncClient:
 
     app = create_app(unused, [SECRET], RateLimiter(per_minute=per_minute), now=lambda: NOW)
     app.state.services = services
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
+    return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
 @pytest_asyncio.fixture(loop_scope="session")
@@ -56,9 +57,9 @@ async def client(app_pool: asyncpg.Pool) -> AsyncIterator[httpx.AsyncClient]:
         yield c
 
 
-async def reads(admin_pool: asyncpg.Pool, subject: str) -> list[tuple[str, bool]]:
-    rows = await admin_pool.fetch("select chunk_id, found from excerpt_log where subject = $1 order by id", subject)
-    return [(r["chunk_id"], r["found"]) for r in rows]
+async def reads(admin_pool: asyncpg.Pool, subject: str) -> list[tuple[str, str]]:
+    rows = await admin_pool.fetch("select chunk_id, outcome from excerpt_log where subject = $1 order by id", subject)
+    return [(r["chunk_id"], r["outcome"]) for r in rows]
 
 
 async def test_a_reader_cleared_for_a_chunk_gets_its_text_and_its_labels(client: httpx.AsyncClient) -> None:
@@ -137,7 +138,16 @@ async def test_an_excerpt_request_without_a_valid_token_is_refused_before_anythi
 
 @pytest.mark.parametrize(
     "chunk_id",
-    ["NL91ABNA0417164300", "sec-004%232", "SEC-004", "SEC-004%232%20or%201=1", "SEC-0004%232", "X-001%231"],
+    [
+        "NL91ABNA0417164300",
+        "sec-004%232",
+        "SEC-004",
+        "SEC-004%232%20or%201=1",
+        "SEC-0004%232",
+        "X-001%231",
+        "SEC-\u0660\u0660\u0664%23\u0662",  # Arabic-Indic digits: a digit to \\d, not to this pattern
+        "SEC-\uff10\uff10\uff14%23\uff12",  # full-width digits, the same
+    ],
 )
 async def test_an_id_that_is_not_shaped_like_a_chunk_id_is_rejected_and_reaches_no_log_or_record(
     client: httpx.AsyncClient, admin_pool: asyncpg.Pool, chunk_id: str
@@ -159,13 +169,13 @@ async def test_every_excerpt_request_is_recorded_and_logged_with_ids_only_the_re
         await client.get(path(RUNBOOK), headers=token("carol"))
         await client.get(path("HR-001#1"), headers=token("carol"))
 
-    assert (await reads(admin_pool, "carol"))[len(before) :] == [(RUNBOOK, False), ("HR-001#1", True)]
+    assert (await reads(admin_pool, "carol"))[len(before) :] == [(RUNBOOK, "not_found"), ("HR-001#1", "found")]
     row = await admin_pool.fetchrow("select * from excerpt_log where subject = 'carol' order by id desc limit 1")
     assert (row["departments"], row["clearance"]) == (["hr"], "confidential")
     events = [{k: v for k, v in entry.items() if k != "log_level"} for entry in logs]
     assert events == [
-        {"event": "excerpt", "subject": "carol", "chunk_id": RUNBOOK, "found": False},
-        {"event": "excerpt", "subject": "carol", "chunk_id": "HR-001#1", "found": True},
+        {"event": "excerpt", "subject": "carol", "chunk_id": RUNBOOK, "outcome": "not_found"},
+        {"event": "excerpt", "subject": "carol", "chunk_id": "HR-001#1", "outcome": "found"},
     ]
 
 
@@ -185,11 +195,11 @@ async def test_excerpt_requests_and_questions_share_one_rate_limit_per_subject(a
     "statement",
     [
         "select * from excerpt_log",
-        "update excerpt_log set found = true",
+        "update excerpt_log set outcome = 'found'",
         "delete from excerpt_log",
         "truncate excerpt_log",
-        "insert into excerpt_log (at, subject, departments, clearance, chunk_id, found)"
-        " values ('2020-01-01', 'x', '{}', 'public', 'HR-001#1', true)",
+        "insert into excerpt_log (at, subject, departments, clearance, chunk_id, outcome)"
+        " values ('2020-01-01', 'x', '{}', 'public', 'HR-001#1', 'found')",
     ],
 )
 async def test_the_application_cannot_read_change_delete_or_backdate_excerpt_records(
@@ -198,3 +208,78 @@ async def test_the_application_cannot_read_change_delete_or_backdate_excerpt_rec
     async with app_pool.acquire() as conn:
         with pytest.raises(asyncpg.InsufficientPrivilegeError):
             await conn.execute(statement)
+
+
+async def test_a_link_a_poisoned_source_plants_is_withheld_from_the_excerpt_as_it_is_from_an_answer(
+    client: httpx.AsyncClient, documents: list[corpus.Document]
+) -> None:
+    chunks = [c for d in documents if d.id == "HR-007" for c in d.chunks()]
+    poisoned = next(c for c in chunks if "travel-bank-portal.example.net" in c.text)
+    honest = next(c for c in chunks if "https://intranet.bank.example/travel" in c.text)
+
+    shown = (await client.get(path(poisoned.id), headers=token("dave"))).json()["text"]
+    kept = (await client.get(path(honest.id), headers=token("dave"))).json()["text"]
+
+    assert "travel-bank-portal" not in shown
+    assert "[link removed]" in shown
+    assert "https://intranet.bank.example/travel" in kept  # a link to an allowed host is shown as written
+
+
+async def test_a_read_that_fails_in_the_database_is_recorded_as_an_error_and_answered_503(
+    app_pool: asyncpg.Pool, admin_pool: asyncpg.Pool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(*args: object, **kwargs: object) -> None:
+        raise asyncpg.PostgresConnectionError("the connection was lost")
+
+    monkeypatch.setattr(store, "read", broken)
+    before = await reads(admin_pool, "alice")
+    async with client_for(app_pool, per_minute=1000, raise_app_exceptions=False) as client:
+        with capture_logs() as logs:
+            response = await client.get(path("HR-001#1"), headers=token("alice"))
+
+    assert response.status_code == 503
+    assert set(response.json()) == {"detail", "reference"}
+    assert (await reads(admin_pool, "alice"))[len(before) :] == [("HR-001#1", "error")]
+    assert [e["outcome"] for e in logs if e["event"] == "excerpt"] == ["error"]
+
+
+@pytest.mark.parametrize("url", ["/excerpts/SEC-004%232/", "/ask/", "/healthz/"])
+async def test_a_trailing_slash_is_a_404_not_a_redirect_to_an_address_that_lost_the_proxy_prefix(
+    client: httpx.AsyncClient, url: str
+) -> None:
+    # Behind nginx the API is under /api/ on port 8440. A redirect built by the API knows neither.
+    response = await client.get(url)
+    assert response.status_code == 404
+    assert "location" not in response.headers
+
+
+async def test_the_migration_carries_the_unreleased_found_column_over_to_outcome(
+    admin_dsn: str, admin_pool: asyncpg.Pool
+) -> None:
+    # 0.2.0 was built with excerpt_log.found before it had an outcome. A database from that build is upgraded in
+    # place. DDL is transactional in Postgres, so the old shape is staged and rolled back without touching the session.
+    conn = await asyncpg.connect(admin_dsn)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute(
+            "drop table excerpt_log;"
+            " create table excerpt_log (id uuid primary key default uuidv7(), at timestamptz not null default now(),"
+            " subject text not null, departments text[] not null, clearance text not null, chunk_id text not null,"
+            " found boolean not null);"
+            " insert into excerpt_log (subject, departments, clearance, chunk_id, found) values"
+            " ('old', '{}', 'public', 'HR-001#1', true), ('old', '{}', 'public', 'SEC-004#2', false)"
+        )
+        await store.migrate(conn, "app-role-test-password")
+        await store.migrate(conn, "app-role-test-password")
+        rows = await conn.fetch("select chunk_id, outcome from excerpt_log where subject = 'old' order by id")
+        columns = await conn.fetch(
+            "select column_name from information_schema.columns where table_name = 'excerpt_log'"
+        )
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+    assert [(r["chunk_id"], r["outcome"]) for r in rows] == [("HR-001#1", "found"), ("SEC-004#2", "not_found")]
+    assert "found" not in {c["column_name"] for c in columns}
+    assert await admin_pool.fetchval("select count(*) from excerpt_log where subject = 'old'") == 0

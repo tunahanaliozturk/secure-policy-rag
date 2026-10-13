@@ -4,6 +4,7 @@ import logging
 from typing import Literal
 
 import structlog
+from fastapi.telemetry import TelemetryConfig
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -12,6 +13,12 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExport
 tracer = trace.get_tracer("secure_policy_rag")
 
 type TraceExporter = Literal["console", "none"]
+
+# FastAPI traces every request by itself when a tracer provider exists, and puts the path and the query string of the
+# request on the span; it can also export validation and exception messages, and pick up an exporter from the
+# environment. All of that is text the caller chose, and this service's spans carry ids, counts and outcomes only. So
+# the framework's own tracing and logging are off in both apps, and the spans are the ones pipeline.py opens.
+FRAMEWORK_TELEMETRY: TelemetryConfig = {"tracing": False, "logs": False, "auto_configure": False}
 
 
 def configure(level: str, exporter: TraceExporter) -> None:

@@ -25,12 +25,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from secure_policy_rag import identity
 from secure_policy_rag.identity import ClearanceLabel, Department, Identity
 from secure_policy_rag.pipeline import Assistant, Outcome
+from secure_policy_rag.telemetry import FRAMEWORK_TELEMETRY
 
 log = structlog.get_logger()
 
 # 'CR-001#2': document id and section number (corpus.py). The id in the path is caller-chosen text that ends up in the
-# log and the excerpt record, so anything not shaped like an id is refused before either sees it.
-CHUNK_ID = r"^[A-Z]{2,5}-\d{3}#\d{1,3}$"
+# application's log line and the excerpt record, so anything not shaped like an id is refused before either sees it.
+# [0-9], not \d: \d also matches every other script's digits, and an id written in those is not an id here.
+CHUNK_ID = r"^[A-Z]{2,5}-[0-9]{3}#[0-9]{1,3}$"
 
 
 @dataclass(frozen=True)
@@ -124,7 +126,19 @@ def create_app(
             app.state.services = services
             yield
 
-    app = FastAPI(title="secure-policy-rag", version=version("secure-policy-rag"), lifespan=lifespan)
+    # No documentation routes: the routes below are the whole surface (`spr openapi` writes the document from the
+    # code, without serving it). No redirect for a trailing slash either: the redirect is built before authentication
+    # and, behind the console's proxy, points at an address without the proxy's port or its /api prefix.
+    app = FastAPI(
+        title="secure-policy-rag",
+        version=version("secure-policy-rag"),
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        redirect_slashes=False,
+        telemetry=FRAMEWORK_TELEMETRY,
+    )
     bearer = HTTPBearer(auto_error=False)
 
     def reader(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> Identity:

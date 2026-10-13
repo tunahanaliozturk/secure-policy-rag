@@ -122,17 +122,27 @@ class Assistant:
 
     async def excerpt(self, reader: Identity, chunk_id: str) -> store.Passage | None:
         """One chunk as this reader may read it, or ``None``. Read through the same row-level security as retrieval,
-        redacted like an answer, and recorded before it is returned, whether or not there was anything to return."""
+        held to the rules an answer is held to, and recorded before it is returned: found, not found, or a read that
+        failed. An excerpt must not show more than an answer citing it could."""
         with tracer.start_as_current_span("excerpt") as span:
             span.set_attribute("spr.clearance", reader.clearance.label)
-            passage = await store.read(self._pool, reader, chunk_id)
-            span.set_attribute("spr.found", passage is not None)
-            await store.record_read(self._pool, reader, chunk_id, found=passage is not None)
-            log.info("excerpt", subject=reader.subject, chunk_id=chunk_id, found=passage is not None)
+            try:
+                passage = await store.read(self._pool, reader, chunk_id)
+            except Exception:
+                await self._read(span, reader, chunk_id, "error")
+                raise
+            await self._read(span, reader, chunk_id, "not_found" if passage is None else "found")
             if passage is None:
                 return None
-            # The same reason answers are redacted: a source can hold a worked example with a customer's IBAN.
-            return replace(passage, text=pii.redact(passage.text).text)
+            # A source can hold a worked example with a customer's IBAN, and a poisoned source a link to a foreign
+            # host. An answer is redacted for the first and blocked for the second (verify.py); so is this.
+            text = verify.withhold_links(pii.redact(passage.text).text, self._allowed_link_hosts)
+            return replace(passage, text=text)
+
+    async def _read(self, span: trace.Span, reader: Identity, chunk_id: str, outcome: store.ReadOutcome) -> None:
+        span.set_attribute("spr.outcome", outcome)
+        await store.record_read(self._pool, reader, chunk_id, outcome)
+        log.info("excerpt", subject=reader.subject, chunk_id=chunk_id, outcome=outcome)
 
     async def _finish(self, audit: _Audit, started: float) -> Answer:
         # Sources can hold personal data (a worked example with a customer's IBAN), and the model may repeat it.

@@ -6,15 +6,17 @@ and no bug in the API can turn it into a token mint. There are no passwords, whi
 service can be any of the six. Do not run it anywhere a stranger can reach.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from secure_policy_rag import identity
 from secure_policy_rag.identity import DEMO_IDENTITIES, ClearanceLabel, Department, Identity
+from secure_policy_rag.telemetry import FRAMEWORK_TELEMETRY
 
 
 class Who(BaseModel):
@@ -46,10 +48,27 @@ def _person(who: Identity) -> dict[str, object]:
     return {"subject": who.subject, "departments": sorted(who.departments), "clearance": who.clearance.label}
 
 
-def build_demo_login(secret: bytes, ttl: timedelta, now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> FastAPI:
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+
+
+def build_demo_login(
+    secret: bytes,
+    ttl: timedelta,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    allowed_hosts: Sequence[str] = LOCAL_HOSTS,
+) -> FastAPI:
     app = FastAPI(
-        title="secure-policy-rag demo login", version=version("secure-policy-rag"), docs_url=None, redoc_url=None
+        title="secure-policy-rag demo login",
+        version=version("secure-policy-rag"),
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        redirect_slashes=False,
+        telemetry=FRAMEWORK_TELEMETRY,
     )
+    # With no password, the name a request was addressed to is the only thing left to check. A page on another site
+    # whose DNS name is re-pointed at 127.0.0.1 still sends its own name in Host, and is refused with a 400 here.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(allowed_hosts), www_redirect=False)
 
     @app.post("/token", responses={404: {"model": Problem, "description": "Not one of the demo identities."}})
     async def token(who: Who) -> Issued:

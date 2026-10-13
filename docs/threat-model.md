@@ -36,6 +36,15 @@ platform's job and are out of scope here.
 | Audit record altered or backdated | Insert-only grant on listed columns; database stamps id and time | `schema.sql` | `test_the_application_cannot_read_change_delete_or_backdate_audit_records` |
 | A refusal reveals that a restricted document exists | One refusal text for every reason | `pipeline.REFUSAL` | answer cases a04, a05 |
 | One user floods the model | Token bucket per verified subject | `api.RateLimiter` | `test_the_rate_limit_applies_per_verified_subject` |
+| Reader opens a cited chunk by id that they may not read, or probes ids to learn what exists | The excerpt endpoint reads through the same row-level security; one 404 for hidden and absent | `store.reading_as`, `api.py` | `test_a_restricted_chunk_the_caller_may_not_read_is_the_same_404_as_a_chunk_that_does_not_exist`, `test_every_reader_can_open_exactly_the_chunks_the_access_rule_allows` |
+| Opening a source shows personal data an answer would have hidden | Excerpt text redacted like an answer | `pipeline.Assistant.excerpt` | `test_personal_data_in_a_source_is_redacted_in_the_excerpt_as_it_is_in_an_answer` |
+| Caller-chosen text in the excerpt path reaches the log or the read record | Path validated against the shape of a chunk id first | `api.CHUNK_ID` | `test_an_id_that_is_not_shaped_like_a_chunk_id_is_rejected_and_reaches_no_log_or_record` |
+| Excerpt reads leave no trace, or the trace is altered | Insert-only `excerpt_log`, refused requests included, database-stamped time | `schema.sql` | `test_every_excerpt_request_is_recorded...`, `test_the_application_cannot_read_change_delete_or_backdate_excerpt_records` |
+| The API is talked into minting a token | It has no route that issues one; the demo login is another process | `demo_login.py`, import contract | `test_the_api_process_has_no_route_that_could_mint_a_token`, `lint-imports` |
+| Someone gets a demo token with a clearance of their choosing | Six fixed identities; any other name is a 404, any extra field a 422 | `demo_login.py` | `test_demo_login.py` |
+| A script on the page reads the bearer token | Token in module memory only; no inline script or style, no other origin | `web/src/shared/api/tokens.ts`, `web/spr-headers.conf` | journey "a person signs in, asks" (storage and cookies empty); journey "every response on the one origin carries the security headers"; every journey fails on a reported CSP violation |
+| The page shows text the server did not return to this reader | The page computes no access; every cell is a request made as that person | `web/src/features/compare/AccessCell.vue` | `CompareView.test.ts`; journeys "the same question as six people" and "a source the person may not read cannot be opened by editing the address" |
+| A model answer carries markup or a link that the page renders | Answers rendered as text only; `v-html` is a lint error | `web/src/features/ask/AnswerPanel.vue` | `web/eslint.config.ts` (`vue/no-v-html`) |
 
 ## OWASP Top 10 for LLM Applications (2025)
 
@@ -43,9 +52,9 @@ platform's job and are out of scope here.
 |---|---|---|
 | LLM01 Prompt injection | Layers in ADR 4: nothing above the reader's clearance in the prompt, fenced data, no tools, output verification. Four poisoned documents in the corpus and answer cases that simulate a model following them. | A persuasive injection that makes the model state something false, with a valid citation and no link, passes every check. No real-model run exists to say how often that happens. |
 | LLM02 Sensitive information disclosure | Row-level security, PII redaction both ways, audit with redacted text only, a refusal that does not reveal what exists. | Names, addresses and dates of birth are not detected (ADR 3). Text within the reader's own clearance is shown as written, by design. |
-| LLM03 Supply chain | Locked dependencies, licence audit, pip-audit in CI, embedding model baked into the image so nothing downloads at run time, onnxruntime telemetry switched off. | Actions are pinned to tags, not commit hashes. No signature check on the downloaded embedding model beyond the hub's own. No container image scan. |
+| LLM03 Supply chain | Locked dependencies for Python and npm, a licence audit for each, pip-audit and `npm audit` in CI, Trivy on both images failing on fixable HIGH findings, embedding model baked into the image so nothing downloads at run time, onnxruntime telemetry switched off. | Actions are pinned to tags, not commit hashes. No signature check on the downloaded embedding model beyond the hub's own. Lighthouse runs from npm at a pinned version, outside the lockfile. |
 | LLM04 Data and model poisoning | Poisoned documents are contained by the same layers as LLM01. Ingestion runs as an administrator role the app does not hold. | No review or signing of documents before ingestion, and no scan that flags instruction-like text in new documents. |
-| LLM05 Improper output handling | Answers are checked for citations and links, then redacted, and returned as JSON data; nothing renders or executes them here. | The client that displays the answer must still escape it. Markdown in answers is not stripped. A bare domain with no scheme, `//` or `www.` (`portal.example.net/login`) is not recognised as a link, so a client must not auto-link one. |
+| LLM05 Improper output handling | Answers are checked for citations and links, then redacted, and returned as JSON data. The browser console renders them as text: no HTML, no auto-linking, and a content security policy that allows no inline script. | Another client must still escape the answer. Markdown in answers is not stripped, so the console shows it as typed. A bare domain with no scheme, `//` or `www.` (`portal.example.net/login`) is not recognised as a link, so a client must not auto-link one. |
 | LLM06 Excessive agency | The model has no tools and makes one call per question. | Nothing further to cover today; adding tools would reopen this. |
 | LLM07 System prompt leakage | The system prompt holds no secrets, so leaking it costs nothing. | Not tested; there is nothing to protect in it. |
 | LLM08 Vector and embedding weaknesses | Access control applies to the vector search itself, not after it. Exact search, so no approximate index can drop rows under the filter. | Embeddings are stored in the clear; anyone with database access can attempt inversion. That is the same people who can read the text. |
@@ -61,5 +70,13 @@ platform's job and are out of scope here.
 - **No real-model numbers.** There is no API key on the machine this was built on. Every answer-quality claim in this
   repository is about the guards, measured with scripted models, not about Claude.
 - **Demo identity.** HMAC tokens without revocation stand in for the bank's identity provider (ADR 5).
+- **The demo login has no passwords.** Anyone who can reach it can be any of the six people, restricted clearance
+  included (ADR 10). Compose binds it to 127.0.0.1. Exposing it is exposing every document in the corpus.
+- **A token in the browser is a token an injected script could use.** It is kept out of storage, and the content
+  security policy allows no script but the page's own, but script that did run on the page could call the API as the
+  signed-in person for as long as the page is open. An `HttpOnly` cookie set by the identity provider would close
+  that; this demo has no such provider (ADR 11).
+- **The comparison view is a demo-only convenience.** It signs in as all six people at once, which no real user can
+  do, and its probes fill `excerpt_log` with refused reads that would look like an attack anywhere else.
 - **Documents are trusted to be classified correctly.** A restricted text filed as internal is shown to everyone
   internal. Classification is an upstream process this system cannot check.

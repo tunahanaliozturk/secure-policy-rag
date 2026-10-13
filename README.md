@@ -20,6 +20,23 @@ There is no API key on the machine this was built on, so **nothing here measures
 about retrieval and the guards around the model. [docs/evaluation.md](docs/evaluation.md) says exactly what was and was
 not run.
 
+## Try it in a browser
+
+After the quick start below, open <http://127.0.0.1:8440>. Sign in as one of the six demo people, ask a question, and
+open a cited source. Then choose "Ask as everyone": the same question goes out six times, once as each person.
+
+![One question asked as six people. Each row is a person, each tinted column a source somebody cited, and each cell says whether that person cited it, can read it, or has no access.](docs/images/ask-as-everyone.png)
+
+The page works out none of this. Every cell is a request to `GET /excerpts/{chunk_id}` sent with that person's token,
+and the database answers each one: bob holds restricted clearance and still gets "No access" to the security team's
+restricted runbook, because he is in compliance. A browser journey checks the table against the server
+(`web/e2e/console.spec.ts`, "the same question as six people").
+
+The answers in the picture were written by the scripted stand-in, which quotes the first sentence of the best source
+the database returned for that person. Compare the sources, not the wording. There are no passwords: the demo login
+gives a token to anyone who names one of the six, so the stack binds to 127.0.0.1
+([ADR 10](docs/adr/0010-the-demo-login-is-a-separate-process.md)).
+
 ## Quick start
 
 Needs Docker. Answers come from a deterministic stand-in model unless you set `SPR_MODEL_PROVIDER=anthropic` and
@@ -42,6 +59,9 @@ curl -s 127.0.0.1:8400/ask -H "Authorization: Bearer $TOKEN" -H "Content-Type: a
 Now ask as `erin` (security, restricted clearance) and as `dave` (markets, internal) which systems are the crown jewel
 systems. Erin's answer cites the restricted incident runbook. Dave's never does, because the database does not return
 that chunk to him. `requests.http` walks through more, and CI runs these commands on every push (`tools/smoke.py`).
+
+The same stack serves the browser console on <http://127.0.0.1:8440>, with the API under `/api/` and the demo login
+under `/login/` on that one origin. The API is also on port 8400 and the demo login on 8441.
 
 | Demo user | Departments | Clearance |
 |---|---|---|
@@ -97,6 +117,10 @@ policy document the assistant reads. [docs/threat-model.md](docs/threat-model.md
 | Poisoned document gives orders | No tools, fenced excerpts, answer verification | four poisoned documents, answer cases a07, a08, a12, a14, a15 |
 | Phishing link in an answer | Link must be in a source and on an allowed host | `test_guards.py`, case a14 |
 | Tampered audit trail | Insert-only column grant, database-stamped time | `test_audit.py` |
+| Opening a cited source by id that you may not read, or probing ids to learn what exists | Excerpts read under the same row-level security; one 404 for hidden and absent | `test_excerpts.py`: status, body and headers equal for both, for each demo user |
+| The API talked into issuing a token | It has no such route; the demo login is a separate process | `test_the_api_process_has_no_route_that_could_mint_a_token`, import contract |
+| Browser and server disagreeing about a response | Types generated from the OpenAPI documents, every response parsed, CI fails on drift | `contract` job; ADR 11 records the failing run |
+| A script on the page reading the token | Token in memory only, `default-src 'self'` on every response | journeys in `web/e2e/console.spec.ts` |
 
 ## Measured results
 
@@ -117,7 +141,31 @@ Latency of everything except the model call: 17.3 ms p50, 21.0 ms p95, 36.1 ms p
 first measurement was 89.7 ms p50: onnxruntime's default thread pool kept spinning after each embedding and starved the
 event loop. Capping it at two threads fixed it; the story is in the benchmark file.
 
-Tests: 86 unit tests (offline), 48 integration tests (real Postgres in Docker).
+The browser console, measured on 2026-10-13 against the compose stack on the same laptop, with Lighthouse 12.6.1 in
+Chrome 154, phone emulation and Lighthouse's simulated throttling (150 ms round trip, 1.6 Mbit/s, 4x CPU slowdown),
+six runs of the sign-in page as nginx serves it, in two sessions ([docs/operations.md](docs/operations.md) lists each):
+
+| Measure | Result | CI fails above or below |
+|---|---|---|
+| Lighthouse performance | 0.99 in five runs, 0.95 in one | below 0.95 |
+| Lighthouse accessibility | 1.0 | below 1.0 |
+| Largest contentful paint | 1,720 to 2,004 ms | above 2,500 ms |
+| Total blocking time | 6 to 40 ms in five runs, 213 ms in one | above 200 ms, judged on the best of three runs |
+| Cumulative layout shift | 0 | above 0.1 |
+| Every script and style of all three routes, gzip | 88.42 kB | above 100 kB (`web/.size-limit.json`) |
+| First page on the wire, 10 requests | 85,300 bytes, of which 79,524 script | not gated |
+| axe violations on every view the journeys visit | 0 | any |
+
+Lighthouse CI judges every limit on the best of its three runs, so the one slow run above did not fail the gate.
+
+Two of these were wrong before they were right, and the gates are how that was found. Lighthouse reported a content
+security policy violation on every load (the schema library probing for `eval`) and a layout shift of 0.114 (the page
+shell painted before its first view). Both are fixed, and every browser journey now fails on any reported violation
+([ADR 11](docs/adr/0011-browser-console-generated-contract-parsed-responses-one-origin.md)).
+
+Tests: 109 unit tests (offline) and 73 integration tests (real Postgres in Docker) in Python; 81 unit and component
+tests for the console at 98.9 percent of statements and 94.1 percent of branches; 8 browser journeys, each run in
+Chromium and in Firefox against the compose stack.
 
 ## Limitations
 
@@ -129,6 +177,16 @@ Tests: 86 unit tests (offline), 48 integration tests (real Postgres in Docker).
 - Demo tokens have no revocation; a bank would use its identity provider ([ADR 5](docs/adr/0005-signed-demo-tokens.md)).
 - Rate limits are per process. The corpus is 35 synthetic documents, 149 chunks; the evaluation sets were written by
   the same person, which flatters every retriever.
+- The demo login has no passwords, and the console's "Ask as everyone" signs in as all six people at once. Both exist
+  to make the access rule visible and have no place in a deployment
+  ([ADR 10](docs/adr/0010-the-demo-login-is-a-separate-process.md)).
+- In the demo stack every outcome is "Answered". The scripted stand-in answers from whatever source ranks first for
+  the person asking, and each of the six can read at least the public policies, so people differ in sources, not in
+  outcome. The refused, withheld and declined states are covered by component tests against a stand-in server
+  (`web/src/features/ask/AskView.test.ts`), not by the journeys.
+- The console keeps its token in memory, so a reload signs the person out. It is English only, light theme only.
+- The browser numbers are from one laptop. The same Lighthouse and journey jobs are written into CI but had not run
+  on a GitHub runner when this was written.
 
 ## Documentation
 
@@ -143,7 +201,10 @@ Tests: 86 unit tests (offline), 48 integration tests (real Postgres in Docker).
   [5 demo tokens](docs/adr/0005-signed-demo-tokens.md),
   [6 no LangGraph](docs/adr/0006-plain-pipeline-not-langgraph.md),
   [7 hybrid retrieval](docs/adr/0007-hybrid-retrieval-kept-despite-vector-scoring-higher.md),
-  [8 no model fallback](docs/adr/0008-no-automatic-model-fallback.md)
+  [8 no model fallback](docs/adr/0008-no-automatic-model-fallback.md),
+  [9 excerpts under row-level security](docs/adr/0009-excerpts-are-read-under-the-same-row-level-security.md),
+  [10 separate demo login](docs/adr/0010-the-demo-login-is-a-separate-process.md),
+  [11 browser console](docs/adr/0011-browser-console-generated-contract-parsed-responses-one-origin.md)
 
 ## Development
 
@@ -167,8 +228,29 @@ uv run spr eval-retrieval
 uv run spr eval-answers
 ```
 
+The browser console lives in `web/` and needs Node 24. The journeys and Lighthouse need the compose stack from the
+quick start:
+
+```bash
+cd web
+npm ci
+npm run type-check && npm run lint && npm run format:check
+npm run test:unit
+npm run build && npm run size
+npm run licences && npm audit --audit-level=high
+npx playwright install chromium firefox
+npx playwright test
+npm run lighthouse
+```
+
+`npm run dev` serves the console with the same `/api/` and `/login/` paths proxied to the stack. After changing a
+request or response model, `uv run spr openapi` and `npm run gen:api` regenerate the contract; CI fails if the
+committed files differ from what the code serves.
+
 Stack: FastAPI, asyncpg, Postgres 18 with pgvector, fastembed with onnxruntime, the Anthropic Python SDK, Pydantic,
-OpenTelemetry, structlog. Every dependency, at every depth, is under a permissive licence (`tools/license_audit.py`).
+OpenTelemetry, structlog. Console: Vue 3.5, TypeScript 6.0, Vite 8, Vue Router 5, TanStack Query, Zod 4, Vitest,
+Playwright with axe, nginx. Every dependency, at every depth, is under a permissive licence
+(`tools/license_audit.py`, `npm run licences`).
 
 ## Licence
 

@@ -1,4 +1,4 @@
-"""One question, start to finish: redact, retrieve, generate, verify, redact again, audit.
+"""One question, start to finish: redact, retrieve, generate, verify, redact again, audit. And one excerpt, opened.
 
 A plain sequence of awaited steps rather than an agent graph (ADR 0006). The flow has no loops and no model-chosen
 branches: the model is called at most once and holds no tools. Every exit path writes exactly one audit record, and
@@ -8,7 +8,7 @@ an answer is only returned after its audit record is committed, so there is no a
 import asyncio
 import time
 from collections.abc import Callable, Collection
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 import asyncpg
@@ -119,6 +119,20 @@ class Assistant:
             if not verdict.ok:
                 return await self._finish(audit.done("blocked", BLOCKED), started)
             return await self._finish(audit.done("answered", draft.answer), started)
+
+    async def excerpt(self, reader: Identity, chunk_id: str) -> store.Passage | None:
+        """One chunk as this reader may read it, or ``None``. Read through the same row-level security as retrieval,
+        redacted like an answer, and recorded before it is returned, whether or not there was anything to return."""
+        with tracer.start_as_current_span("excerpt") as span:
+            span.set_attribute("spr.clearance", reader.clearance.label)
+            passage = await store.read(self._pool, reader, chunk_id)
+            span.set_attribute("spr.found", passage is not None)
+            await store.record_read(self._pool, reader, chunk_id, found=passage is not None)
+            log.info("excerpt", subject=reader.subject, chunk_id=chunk_id, found=passage is not None)
+            if passage is None:
+                return None
+            # The same reason answers are redacted: a source can hold a worked example with a customer's IBAN.
+            return replace(passage, text=pii.redact(passage.text).text)
 
     async def _finish(self, audit: _Audit, started: float) -> Answer:
         # Sources can hold personal data (a worked example with a customer's IBAN), and the model may repeat it.

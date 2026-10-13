@@ -4,21 +4,6 @@
 # variables named here. SPR_TOKEN_SECRET has no default: the API refuses to start without one (see README).
 name: secure-policy-rag
 
-x-app: &app
-  image: secure-policy-rag:local
-  environment:
-    SPR_ADMIN_DATABASE_URL: postgresql://postgres:${SPR_ADMIN_DB_PASSWORD:-local-dev-admin}@postgres:5432/policies
-    SPR_APP_DB_PASSWORD: ${SPR_APP_DB_PASSWORD:-local-dev-app}
-    SPR_DATABASE_URL: postgresql://spr_app:${SPR_APP_DB_PASSWORD:-local-dev-app}@postgres:5432/policies
-    SPR_TOKEN_SECRET: ${SPR_TOKEN_SECRET:-}
-    # "scripted" answers offline with a deterministic stand-in; set "anthropic" and ANTHROPIC_API_KEY for Claude.
-    SPR_MODEL_PROVIDER: ${SPR_MODEL_PROVIDER:-scripted}
-    SPR_MODEL: ${SPR_MODEL:-claude-sonnet-5-5}
-    # Per person, per minute. The code's default is 20; "Ask as everyone" sends one question and up to six excerpt
-    # requests as each person, so the demo stack leaves room for a few comparisons in a row.
-    SPR_RATE_LIMIT_PER_MINUTE: ${SPR_RATE_LIMIT_PER_MINUTE:-60}
-    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-
 services:
   postgres:
     image: pgvector/pgvector:0.8.7-pg18-trixie
@@ -33,15 +18,33 @@ services:
       interval: 2s
       retries: 30
 
+  # The only service that connects as the administrator: it creates the schema, the policies and the grants, sets the
+  # application role's password, and loads the corpus. Then it exits. tools/smoke.py fails if any other service is
+  # given the administrator's address or that password.
   setup:
-    <<: *app
+    image: secure-policy-rag:local
     build: .
     entrypoint: ["sh", "-c", "spr migrate && spr ingest /app/corpus"]
+    environment:
+      SPR_ADMIN_DATABASE_URL: postgresql://postgres:${SPR_ADMIN_DB_PASSWORD:-local-dev-admin}@postgres:5432/policies
+      SPR_APP_DB_PASSWORD: ${SPR_APP_DB_PASSWORD:-local-dev-app}
     depends_on:
       postgres: {condition: service_healthy}
 
+  # Connects as spr_app, the role row-level security applies to, and holds nothing that could get around it.
   api:
-    <<: *app
+    image: secure-policy-rag:local
+    environment:
+      SPR_DATABASE_URL: postgresql://spr_app:${SPR_APP_DB_PASSWORD:-local-dev-app}@postgres:5432/policies
+      SPR_TOKEN_SECRET: ${SPR_TOKEN_SECRET:-}
+      # "scripted" answers offline with a deterministic stand-in; set "anthropic" and ANTHROPIC_API_KEY for Claude.
+      SPR_MODEL_PROVIDER: ${SPR_MODEL_PROVIDER:-scripted}
+      SPR_MODEL: ${SPR_MODEL:-claude-sonnet-5-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Per person, per minute. The code's default is 20. With the scripted model each person cites one source, so
+      # "Ask as everyone" sends one question and at most six excerpt requests as each person, and 60 leaves room for
+      # a few comparisons in a row. A real model can cite up to five sources each (SPR_TOP_K): see docs/operations.md.
+      SPR_RATE_LIMIT_PER_MINUTE: ${SPR_RATE_LIMIT_PER_MINUTE:-60}
     ports: ["127.0.0.1:8400:8000"]
     depends_on:
       setup: {condition: service_completed_successfully}

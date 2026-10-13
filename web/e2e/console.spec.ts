@@ -293,16 +293,49 @@ test('a 429 shows how long to wait and a 503 shows the reference to quote', asyn
   await expect(page.getByRole('alert')).toHaveCount(0)
 })
 
-test('every response on the one origin carries the security headers, the proxied ones too', async ({ page }) => {
-  for (const path of ['/', '/ask', '/favicon.svg', '/healthz', '/api/healthz', '/login/identities', '/api/ask']) {
+test('every location on the one origin sends the security headers and its own cache rule', async ({ page }) => {
+  // nginx drops inherited headers in any location that adds one of its own, and every location here does. So this
+  // asks each of them for something, the ones nginx answers by itself with an error included.
+  const home = await page.request.get('/')
+  const script = /src="(\/assets\/[^"]+\.js)"/.exec(await home.text())?.[1]
+  expect(script, 'the page names its entry script').toBeDefined()
+  const year = 'public, max-age=31536000, immutable'
+  const locations: [path: string, status: number, cache: string | undefined][] = [
+    ['/', 200, 'no-cache'],
+    ['/ask', 200, 'no-cache'],
+    ['/favicon.svg', 200, 'no-cache'],
+    ['/healthz', 200, undefined],
+    [script ?? '/', 200, year],
+    // A miss under /assets/ must not be kept: after the next build the name means something.
+    ['/assets/nope.js', 404, 'no-store'],
+    // Answers of the API and the login hold restricted text and tokens, and sign-out does not clear the HTTP cache.
+    ['/api/healthz', 200, 'no-store'],
+    ['/api/ask', 405, 'no-store'],
+    ['/api/excerpts/SEC-004%232', 401, 'no-store'],
+    ['/api/nowhere', 404, 'no-store'],
+    ['/login/identities', 200, 'no-store'],
+    ['/login/nowhere', 404, 'no-store'],
+  ]
+  for (const [path, status, cache] of locations) {
     const response = await page.request.get(path)
     const headers = response.headers()
+    expect(response.status(), path).toBe(status)
     expect(headers['content-security-policy'], path).toBe(
       "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
     )
     expect(headers['x-content-type-options'], path).toBe('nosniff')
     expect(headers['referrer-policy'], path).toBe('no-referrer')
+    expect(headers['cache-control'], path).toBe(cache)
   }
+
+  const issued = await page.request.post('/login/token', { data: { name: 'erin' } })
+  expect([issued.status(), issued.headers()['cache-control']]).toEqual([200, 'no-store'])
+  const body: unknown = await issued.json()
+  const bearer = typeof body === 'object' && body !== null && 'token' in body ? String(body.token) : ''
+  const excerpt = await page.request.get('/api/excerpts/SEC-004%232', {
+    headers: { Authorization: `Bearer ${bearer}` },
+  })
+  expect([excerpt.status(), excerpt.headers()['cache-control']]).toEqual([200, 'no-store'])
 })
 
 test('a view whose script is gone reloads once, then says the page could not be loaded', async ({ page }) => {
